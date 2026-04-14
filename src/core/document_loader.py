@@ -61,3 +61,5 @@ def load_pdf(file_path: str) -> list[Document]:
         raise ValueError("load_pdf only accepts .pdf files.")
 
     return load_document(file_path)
+
+

@@ -19,3 +19,4 @@ def get_embedding_model():
     repository remains compatible with different environments.
     """
     return HuggingFaceEmbeddings(model_name=config.EMBEDDING_MODEL)
+
