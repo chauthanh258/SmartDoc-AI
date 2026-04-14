@@ -10,3 +10,4 @@ pdfplumber
 langchain-ollama
 torchvision
 langchain-huggingface
+docx2txt
