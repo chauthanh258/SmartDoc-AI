@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import os
 import config
@@ -10,10 +11,10 @@ from src.core.llm import get_llm
 from src.ui.sidebar import render_sidebar
 from src.ui.chat_interface import render_chat_interface
 
-# Cấu hình trang
+# --- Cấu hình trang ---
 st.set_page_config(page_title="SmartDoc AI", page_icon="📄", layout="wide")
 
-# CSS tùy chỉnh
+# --- CSS tùy chỉnh (Primary: #007BFF, Secondary: #FFC107) ---
 st.markdown("""
 <style>
     .stButton>button {
@@ -28,51 +29,47 @@ st.markdown("""
         color: black;
         box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
+    .stExpander {
+        border-left: 4px solid #FFC107;
+        border-radius: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📄 SmartDoc AI - Hỗ trợ tài liệu thông minh")
 
-# Khởi tạo Session State
+# --- Khởi tạo Session State ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "rag_manager" not in st.session_state:
     st.session_state.rag_manager = None
 
-# Khởi tạo các thành phần Core
+# --- Khởi tạo các thành phần Core ---
 embedding_model = get_embedding_model()
 llm = get_llm()
-
-# Khởi tạo Managers
 vs_manager = VectorStoreManager(embedding_model)
 
 if st.session_state.rag_manager is None:
     st.session_state.rag_manager = RAGChainManager(llm)
 
-# Khởi tạo Chain Manager trong session state nếu chưa có
-if "chain_manager" not in st.session_state:
-    llm = get_llm()
-    st.session_state.chain_manager = RAGChainManager(llm)
-
+# --- Render Sidebar (bao gồm file uploader + settings) ---
 uploaded_file = render_sidebar()
 
-# 2. Xử lý tài liệu
+# --- Xử lý tài liệu được upload ---
 if uploaded_file is not None:
     file_path = os.path.join(config.UPLOAD_DIR, uploaded_file.name)
-    
-    # Lưu file tạm thời
-    if not os.path.exists(config.UPLOAD_DIR):
-        os.makedirs(config.UPLOAD_DIR)
-        
+    os.makedirs(config.UPLOAD_DIR, exist_ok=True)
+
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    
-    # Thử load vectorstore cũ
+
+    # Thử tải vectorstore sẵn có từ disk
     vectorstore = vs_manager.load_vectorstore()
-    
-    # Nếu chưa có index, tiến hành tạo mới
+
+    # Nếu chưa có, xây dựng mới từ tài liệu vừa upload
     if vectorstore is None:
         with st.status("Đang xử lý tài liệu...", expanded=True) as status:
+            # Đọc tài liệu
             if file_path.lower().endswith('.pdf'):
                 docs = load_pdf(file_path)
             elif file_path.lower().endswith('.docx'):
@@ -81,19 +78,35 @@ if uploaded_file is not None:
                 docs = loader.load()
             else:
                 docs = []
-                st.error("Định dạng không hỗ trợ.")
-            
+                st.error("Định dạng không hỗ trợ. Chỉ chấp nhận PDF và DOCX.")
+
             if docs:
-                chunks = split_documents(docs)
+                # Lấy chunk settings từ session_state (được set bởi components.py)
+                chunk_size = st.session_state.get("chunk_size", config.CHUNK_SIZE)
+                chunk_overlap = st.session_state.get("chunk_overlap", config.CHUNK_OVERLAP)
+
+                # Clamp về giá trị hợp lệ theo whitelist của text_splitter
+                from src.core.text_splitter import ALLOWED_CHUNK_SIZES, ALLOWED_CHUNK_OVERLAPS
+                if chunk_size not in ALLOWED_CHUNK_SIZES:
+                    chunk_size = min(ALLOWED_CHUNK_SIZES, key=lambda x: abs(x - chunk_size))
+                if chunk_overlap not in ALLOWED_CHUNK_OVERLAPS:
+                    chunk_overlap = min(ALLOWED_CHUNK_OVERLAPS, key=lambda x: abs(x - chunk_overlap))
+                if chunk_overlap >= chunk_size:
+                    chunk_overlap = max(o for o in ALLOWED_CHUNK_OVERLAPS if o < chunk_size)
+
+                st.caption(f"Chunk size: **{chunk_size}** | Overlap: **{chunk_overlap}**")
+
+                chunks = split_documents(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
                 vectorstore = vs_manager.create_vectorstore(chunks)
-                status.update(label="Đã sẵn sàng!", state="complete", expanded=False)
-    
-    # Cập nhật Retriever cho Chain ngay khi có vectorstore
+                vs_manager.save_vectorstore()
+                status.update(label=f"✅ Đã xử lý {len(chunks)} đoạn văn bản!", state="complete", expanded=False)
+
+    # Cập nhật retriever cho RAG chain
     if vectorstore:
         st.session_state.rag_manager.update_retriever(vectorstore)
 
-# 3. Giao diện Chat
+# --- Giao diện Chat ---
 if st.session_state.rag_manager and st.session_state.rag_manager.chain:
     render_chat_interface(st.session_state.rag_manager)
 else:
-    st.info("Vui lòng tải lên tài liệu để bắt đầu trò chuyện.")
+    st.info("Vui lòng tải lên tài liệu PDF hoặc DOCX ở thanh bên để bắt đầu trò chuyện.")
