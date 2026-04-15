@@ -19,25 +19,30 @@ def render_settings_panel():
         st.caption("Thay đổi cài đặt sẽ có hiệu lực khi tải tài liệu mới.")
 
         # --- Cài đặt Chunking ---
+        from src.core.text_splitter import ALLOWED_CHUNK_SIZES, ALLOWED_CHUNK_OVERLAPS
+        
         st.markdown("**Chunking**")
         col1, col2 = st.columns(2)
         with col1:
-            chunk_size = st.number_input(
+            # Tìm index của giá trị hiện tại trong whitelist để set index mặc định
+            current_size = st.session_state.chunk_size
+            size_index = ALLOWED_CHUNK_SIZES.index(current_size) if current_size in ALLOWED_CHUNK_SIZES else 1 # 1000 là mặc định
+            
+            chunk_size = st.selectbox(
                 "Chunk Size",
-                min_value=200,
-                max_value=4000,
-                value=st.session_state.chunk_size,
-                step=100,
+                options=ALLOWED_CHUNK_SIZES,
+                index=size_index,
                 help="Số ký tự tối đa trong mỗi đoạn văn bản.",
                 key="input_chunk_size"
             )
         with col2:
-            chunk_overlap = st.number_input(
+            current_overlap = st.session_state.chunk_overlap
+            overlap_index = ALLOWED_CHUNK_OVERLAPS.index(current_overlap) if current_overlap in ALLOWED_CHUNK_OVERLAPS else 1 # 100 là mặc định
+            
+            chunk_overlap = st.selectbox(
                 "Chunk Overlap",
-                min_value=0,
-                max_value=1000,
-                value=st.session_state.chunk_overlap,
-                step=50,
+                options=ALLOWED_CHUNK_OVERLAPS,
+                index=overlap_index,
                 help="Số ký tự trùng lặp giữa các đoạn liên tiếp.",
                 key="input_chunk_overlap"
             )
@@ -45,6 +50,7 @@ def render_settings_panel():
         # Lưu vào session_state khi giá trị thay đổi
         st.session_state.chunk_size = chunk_size
         st.session_state.chunk_overlap = chunk_overlap
+
 
         st.divider()
 

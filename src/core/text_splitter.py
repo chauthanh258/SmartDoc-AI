@@ -7,7 +7,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Allowed values requested in Phase 2 so users can tune chunking safely.
 ALLOWED_CHUNK_SIZES = (500, 1000, 1500, 2000)
-ALLOWED_CHUNK_OVERLAPS = (50, 100, 200)
+ALLOWED_CHUNK_OVERLAPS = (0, 50, 100, 200)
+
 
 # Keep defaults aligned with current project behavior.
 DEFAULT_CHUNK_SIZE = 1000

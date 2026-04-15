@@ -3,6 +3,7 @@ from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
+from src.core.citation import format_document_citation
 
 
 class RAGChainManager:
@@ -121,7 +122,8 @@ Câu trả lời:"""
                 sources.append({
                     "content": doc.page_content,
                     "file": meta.get("file_name", meta.get("source", "Tài liệu")),
-                    "page": meta.get("page_number", meta.get("page", "?"))
+                    "page": meta.get("page_number", meta.get("page", "?")),
+                    "citation": format_document_citation(doc)
                 })
             return sources
         except Exception:

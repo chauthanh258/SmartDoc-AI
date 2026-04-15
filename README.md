@@ -145,41 +145,54 @@ smartdoc-ai-rag/
 ## License
 MIT License
 
-## Phase 1 Completed Features
+## Phase 2 Completed Features
 
-- **Unified Document Loader**: Integrated `DOCX` and `PDF` processing in `src/core/document_loader.py`.
-- **Centralized Integration**: Cleaned up `app.py` to use core components for all file types.
-- **Structured Chat History**: Harmonized UI and backend history using `src/utils/chat_history.py` (all messages stored under the `messages` key in session state).
-- **Interactive UI Updates**: 
-    - Real-time display of chat history with user/assistant avatars.
-    - Citation support (view source excerpts).
-    - Sidebar management for clearing history and Vector Store with confirmation dialogs.
-- **Robust Testing**: Comprehensive unit tests covering document processing and history lifecycle.
+- **Dynamic Chunking Strategy**: 
+    - Sidebar support for selecting `chunk_size` (500, 1000, 1500, 2000) and `chunk_overlap` (0, 50, 100, 200).
+    - Validation whitelist ensuring safe and efficient processing.
+- **Professional Citations**:
+    - Automatic formatting of sources: `[Trang X - file.pdf]` or `[Muc X - file.docx]`.
+    - Integrated with `RAGChainManager` for consistent reporting.
+- **Conversational RAG (Multi-turn)**:
+    - Context-aware answers using conversational memory (keeps last 5 turns).
+    - Toggle-able via UI settings.
+- **Performance Optimization**:
+    - Benchmark results collected for different configurations to ensure optimal defaults.
 
+## Performance Benchmark
 
-## How to Test Phase 1
+Test Document: `sample_test.docx` (~2.5k characters)
+Model: `qwen2.5:7b`
+
+| Chunk Size | Num Chunks | Proc Time (s) | Avg QA Time (s) |
+|------------|------------|---------------|-----------------|
+| 500        | 3          | 0.08          | 41.68           |
+| 1000       | 3          | 0.07          | 38.34           |
+| 1500       | 3          | 0.03          | 38.51           |
+
+*Note: QA Time includes retrieval + LLM synthesis. Processing time (Proc) is faster for larger chunks as expected.*
+
+## How to Test
 
 ### 1. Automated Tests (Unit Tests)
-Ensure all dependencies are installed, then run the Phase 1 test suite:
+Ensure all dependencies are installed, then run the test suites:
 
 ```bash
-# Install additional dependencies for testing
+# Install additional dependencies
 pip install pytest python-docx docx2txt
 
-# Run pytest
+# Run Phase 1 Tests
 pytest tests/test_phase1.py -v
+
+# Run Phase 2 Tests (Dynamic Chunking, Citations, Conversational Logic)
+pytest tests/test_phase2.py -v
 ```
 
-**What is tested:**
-- `test_docx_processing`: Verifies that DOCX files are correctly loaded and metadata is extracted.
-- `test_chat_history_lifecycle`: Verifies that initializing, adding, and retrieving chat turns works correctly.
-- `test_clear_functionality`: Verifies that clearing history resets the session state as expected.
-
 ### 2. Manual Verification
-1. Run the application: `streamlit run app.py`.
-2. Upload a sample document (found in `data/samples/`).
-3. Ask a question (e.g., "SmartDoc AI là gì?").
-4. Verify the response and the "Xem nguồn trích dẫn" expander appears.
-5. In the sidebar, check the list of questions in "Lịch sử hội thoại".
-6. Test "Xóa Lịch sử Hội thoại" and confirm. Verify the chat interface is cleared.
-7. Test "Xóa Vector Store" and verify you are prompted to upload a new document.
+1. Run: `streamlit run app.py`.
+2. Upload a document and open "⚙️ Cài đặt nâng cao".
+3. Change **Chunk Size** to **500** and observe processing status.
+4. Ask "Ai là người sáng lập ra SmartDoc AI?".
+5. Ask a follow-up: "Họ làm điều đó khi nào?" (Verify it understands "Họ" refers to the founders).
+6. Click "Xem nguồn trích dẫn" and verify the citation format (e.g., `[Muc ... - file.docx]`).
+
