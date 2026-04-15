@@ -42,3 +42,6 @@ Câu trả lời hữu ích:"""
         if not self.chain:
             return "Vui lòng tải tài liệu lên trước khi đặt câu hỏi."
         return self.chain.invoke(question)
+    
+    def invoke(self, question: str):
+        return self.ask(question)

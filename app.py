@@ -49,17 +49,26 @@ vs_manager = VectorStoreManager(embedding_model)
 if st.session_state.rag_manager is None:
     st.session_state.rag_manager = RAGChainManager(llm)
 
-# 1. Render Sidebar
+# Khởi tạo Chain Manager trong session state nếu chưa có
+if "chain_manager" not in st.session_state:
+    llm = get_llm()
+    st.session_state.chain_manager = RAGChainManager(llm)
+
 uploaded_file = render_sidebar()
 
 # 2. Xử lý tài liệu
 if uploaded_file is not None:
     file_path = os.path.join(config.UPLOAD_DIR, uploaded_file.name)
+    
+    # Lưu file tạm thời
+    if not os.path.exists(config.UPLOAD_DIR):
+        os.makedirs(config.UPLOAD_DIR)
+        
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     
     # Thử load vectorstore cũ
-    vectorstore = vs_manager.load()
+    vectorstore = vs_manager.load_vectorstore()
     
     # Nếu chưa có index, tiến hành tạo mới
     if vectorstore is None:

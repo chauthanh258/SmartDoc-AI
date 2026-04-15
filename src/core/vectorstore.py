@@ -10,35 +10,37 @@ class VectorStoreManager:
         self.vectorstore = None
 
     def create_vectorstore(self, chunks):
-        """Tạo mới hoàn toàn một FAISS vectorstore."""
+        """Tạo FAISS vectorstore từ các đoạn văn bản."""
         self.vectorstore = FAISS.from_documents(chunks, self.embedding_model)
-        self.save()
         return self.vectorstore
 
-    def save(self):
-        """Lưu vectorstore xuống đĩa."""
-        if self.vectorstore:
-            self.vectorstore.save_local(self.path)
+    def save_vectorstore(self):
+        """Lưu vectorstore xuống ổ đĩa."""
+        if self.vectorstore is None:
+            print("Lỗi: Chưa có vectorstore để lưu.")
+            return False
+            
+        os.makedirs(self.path, exist_ok=True)
+        # Sử dụng đường dẫn tương đối để tránh lỗi Unicode trên Windows
+        rel_path = os.path.relpath(self.path, start=os.getcwd())
+        self.vectorstore.save_local(rel_path)
+        return True
 
-    def load(self):
-        """Tải vectorstore từ đĩa."""
-        if os.path.exists(self.path):
+    def load_vectorstore(self):
+        """Tải vectorstore từ ổ đĩa."""
+        index_file = os.path.join(self.path, "index.faiss")
+        if os.path.exists(index_file):
+            rel_path = os.path.relpath(self.path, start=os.getcwd())
             self.vectorstore = FAISS.load_local(
-                self.path, 
+                rel_path, 
                 self.embedding_model, 
                 allow_dangerous_deserialization=True
             )
             return self.vectorstore
         return None
 
-    def add_documents(self, new_chunks):
-        """Nạp thêm tài liệu mới vào index hiện có."""
-        self.load() # Đảm bảo đã load index cũ trước khi add
+    def get_retriever(self, k=3):
+        """Khởi tạo retriever từ vectorstore hiện có."""
         if self.vectorstore:
-            self.vectorstore.add_documents(new_chunks)
-            self.save()
-            print(f"Đã cập nhật thêm {len(new_chunks)} chunks.")
-        else:
-            self.create_vectorstore(new_chunks)
-        return self.vectorstore
-    
+            return self.vectorstore.as_retriever(search_kwargs={"k": k})
+        return None
