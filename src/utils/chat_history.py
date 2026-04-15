@@ -8,7 +8,7 @@ import streamlit as st
 from src.utils.helpers import ensure_dict, to_optional_int, to_snippet, utc_now_iso
 
 
-CHAT_HISTORY_KEY = "chat_history"
+CHAT_HISTORY_KEY = "messages"
 REGISTERED_DOCUMENTS_KEY = "registered_documents"
 
 

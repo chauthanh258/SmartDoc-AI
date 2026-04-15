@@ -72,6 +72,7 @@ streamlit run app.py
 ```
 
 ## Directory Structure
+```bash
 smartdoc-ai-rag/
 ├── app.py                          # ← File chính chạy Streamlit (entry point)
 ├── config.py                       # Cấu hình chung (model name, chunk_size, temperature...)
@@ -140,6 +141,45 @@ smartdoc-ai-rag/
 │   └── 02_reranking_test.ipynb
 
 └── logs/                           # (gitignored) file log nếu cần
-
+```
 ## License
 MIT License
+
+## Phase 1 Completed Features
+
+- **Unified Document Loader**: Integrated `DOCX` and `PDF` processing in `src/core/document_loader.py`.
+- **Centralized Integration**: Cleaned up `app.py` to use core components for all file types.
+- **Structured Chat History**: Harmonized UI and backend history using `src/utils/chat_history.py` (all messages stored under the `messages` key in session state).
+- **Interactive UI Updates**: 
+    - Real-time display of chat history with user/assistant avatars.
+    - Citation support (view source excerpts).
+    - Sidebar management for clearing history and Vector Store with confirmation dialogs.
+- **Robust Testing**: Comprehensive unit tests covering document processing and history lifecycle.
+
+
+## How to Test Phase 1
+
+### 1. Automated Tests (Unit Tests)
+Ensure all dependencies are installed, then run the Phase 1 test suite:
+
+```bash
+# Install additional dependencies for testing
+pip install pytest python-docx docx2txt
+
+# Run pytest
+pytest tests/test_phase1.py -v
+```
+
+**What is tested:**
+- `test_docx_processing`: Verifies that DOCX files are correctly loaded and metadata is extracted.
+- `test_chat_history_lifecycle`: Verifies that initializing, adding, and retrieving chat turns works correctly.
+- `test_clear_functionality`: Verifies that clearing history resets the session state as expected.
+
+### 2. Manual Verification
+1. Run the application: `streamlit run app.py`.
+2. Upload a sample document (found in `data/samples/`).
+3. Ask a question (e.g., "SmartDoc AI là gì?").
+4. Verify the response and the "Xem nguồn trích dẫn" expander appears.
+5. In the sidebar, check the list of questions in "Lịch sử hội thoại".
+6. Test "Xóa Lịch sử Hội thoại" and confirm. Verify the chat interface is cleared.
+7. Test "Xóa Vector Store" and verify you are prompted to upload a new document.
