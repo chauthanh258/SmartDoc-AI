@@ -4,6 +4,7 @@ import os
 import config
 import shutil
 from src.ui.components import render_settings_panel
+from src.utils.chat_history import get_chat_history, clear_chat_history
 
 def render_sidebar():
     with st.sidebar:
@@ -42,16 +43,16 @@ def render_sidebar():
 
         # --- Bộ nhớ hội thoại ---
         st.subheader("💬 Lịch sử hội thoại")
-        if not st.session_state.messages:
+        history = get_chat_history()
+        if not history:
             st.caption("Chưa có lịch sử hội thoại.")
         else:
-            num_msgs = len([m for m in st.session_state.messages if m["role"] == "user"])
+            num_msgs = len(history)
             st.caption(f"Có **{num_msgs}** câu hỏi trong phiên này.")
             with st.container(height=180):
-                for i, msg in enumerate(st.session_state.messages):
-                    if msg["role"] == "user":
-                        label = msg["content"][:45] + "..." if len(msg["content"]) > 45 else msg["content"]
-                        st.markdown(f"👤 {label}", help=msg["content"])
+                for i, entry in enumerate(history):
+                    label = entry["question"][:45] + "..." if len(entry["question"]) > 45 else entry["question"]
+                    st.markdown(f"👤 {label}", help=entry["question"])
 
         st.divider()
 
@@ -69,7 +70,7 @@ def render_sidebar():
             st.warning("Bạn có chắc muốn xóa toàn bộ lịch sử chat?")
             col1, col2 = st.columns(2)
             if col1.button("✅ Có, Xóa", key="yes_chat"):
-                st.session_state.messages = []
+                clear_chat_history()
                 # Xóa cả chat_history trong rag_manager nếu có
                 if st.session_state.get("rag_manager"):
                     st.session_state.rag_manager.clear_history()
@@ -94,7 +95,7 @@ def render_sidebar():
                 if os.path.exists(vs_path):
                     shutil.rmtree(vs_path)
                 st.session_state.rag_manager = None
-                st.session_state.messages = []
+                clear_chat_history() # Xóa luôn chat khi xóa VS
                 st.session_state.confirm_clear_vs = False
                 st.success("Đã xóa dữ liệu Vector Store!")
                 st.rerun()
@@ -103,3 +104,4 @@ def render_sidebar():
                 st.rerun()
 
         return uploaded_file
+
