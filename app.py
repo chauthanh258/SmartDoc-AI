@@ -81,21 +81,13 @@ if uploaded_file is not None:
                 chunk_size = st.session_state.get("chunk_size", config.CHUNK_SIZE)
                 chunk_overlap = st.session_state.get("chunk_overlap", config.CHUNK_OVERLAP)
 
-                # Clamp về giá trị hợp lệ theo whitelist của text_splitter
-                from src.core.text_splitter import ALLOWED_CHUNK_SIZES, ALLOWED_CHUNK_OVERLAPS
-                if chunk_size not in ALLOWED_CHUNK_SIZES:
-                    chunk_size = min(ALLOWED_CHUNK_SIZES, key=lambda x: abs(x - chunk_size))
-                if chunk_overlap not in ALLOWED_CHUNK_OVERLAPS:
-                    chunk_overlap = min(ALLOWED_CHUNK_OVERLAPS, key=lambda x: abs(x - chunk_overlap))
-                if chunk_overlap >= chunk_size:
-                    chunk_overlap = max(o for o in ALLOWED_CHUNK_OVERLAPS if o < chunk_size)
-
                 st.caption(f"Chunk size: **{chunk_size}** | Overlap: **{chunk_overlap}**")
 
                 chunks = split_documents(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
                 vectorstore = vs_manager.create_vectorstore(chunks)
                 vs_manager.save_vectorstore()
                 status.update(label=f"✅ Đã xử lý {len(chunks)} đoạn văn bản!", state="complete", expanded=False)
+
 
     # Cập nhật retriever cho RAG chain
     if vectorstore:

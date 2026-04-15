@@ -1,0 +1,80 @@
+[
+    {
+        "chunk_size": 500,
+        "proc_time": 1.511579990386963,
+        "avg_qa_time": 41.67870489756266,
+        "num_chunks": 3,
+        "qa_details": [
+            {
+                "question": "SmartDoc AI là gì?",
+                "answer": "SmartDoc AI là một công cụ sử dụng kỹ thuật Retrieval-Augmented Generation (Générer renforcé par la ...",
+                "time": 49.84882044792175,
+                "num_sources": 3
+            },
+            {
+                "question": "Làm thế nào để tải tài liệu lên?",
+                "answer": "Trong ngữ cảnh cung cấp, không có thông tin cụ thể về cách tải lên tài liệu. Tuy nhiên, dựa trên nội...",
+                "time": 45.94160604476929,
+                "num_sources": 3
+            },
+            {
+                "question": "Hệ thống hỗ trợ những định dạng file nào?",
+                "answer": "Theo thông tin trong ngữ cảnh, hệ thống đangatesting (kiểm tra) sự tích hợp của Docx2txtLoader, nhưn...",
+                "time": 29.24568819999695,
+                "num_sources": 3
+            }
+        ]
+    },
+    {
+        "chunk_size": 1000,
+        "proc_time": 0.07418203353881836,
+        "avg_qa_time": 38.33568779627482,
+        "num_chunks": 3,
+        "qa_details": [
+            {
+                "question": "SmartDoc AI là gì?",
+                "answer": "SmartDoc AI là một công cụ sử dụng kỹ thuật Retrieval-Augmented Generation (Générations Augmentées p...",
+                "time": 37.24303722381592,
+                "num_sources": 3
+            },
+            {
+                "question": "Làm thế nào để tải tài liệu lên?",
+                "answer": "Trong ngữ cảnh này, không có thông tin cụ thể về cách tải lên tài liệu. Tài liệu chỉ đề cập đến việc...",
+                "time": 46.019686222076416,
+                "num_sources": 3
+            },
+            {
+                "question": "Hệ thống hỗ trợ những định dạng file nào?",
+                "answer": "Theo thông tin trong ngữ cảnh, hệ thống đangatesting (kiểm tra) sự tích hợp của Docx2txtLoader, nhưn...",
+                "time": 31.74433994293213,
+                "num_sources": 3
+            }
+        ]
+    },
+    {
+        "chunk_size": 1500,
+        "proc_time": 0.033815860748291016,
+        "avg_qa_time": 38.507806062698364,
+        "num_chunks": 3,
+        "qa_details": [
+            {
+                "question": "SmartDoc AI là gì?",
+                "answer": "SmartDoc AI là một công cụ sử dụng kỹ thuật Retrieval-Augmented Generation (Générations Augmentées p...",
+                "time": 36.130725622177124,
+                "num_sources": 3
+            },
+            {
+                "question": "Làm thế nào để tải tài liệu lên?",
+                "answer": "Trong ngữ cảnh này, không có thông tin cụ thể về cách tải lên tài liệu. Tài liệu chỉ đề cập đến việc...",
+                "time": 42.39712715148926,
+                "num_sources": 3
+            },
+            {
+                "question": "Hệ thống hỗ trợ những định dạng file nào?",
+                "answer": "Theo thông tin trong ngữ cảnh, hệ thống đangatesting (kiểm tra) sự tích hợp của Docx2txtLoader, nhưn...",
+                "time": 36.99556541442871,
+                "num_sources": 3
+            }
+        ]
+    }
+]
