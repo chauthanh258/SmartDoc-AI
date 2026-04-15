@@ -2,26 +2,45 @@ from langchain_community.vectorstores import FAISS
 import os
 import config
 
-def create_vectorstore(chunks, embedding_model):
-    """Creates a FAISS vectorstore from text chunks."""
-    vectorstore = FAISS.from_documents(chunks, embedding_model)
-    return vectorstore
+class VectorStoreManager:
+    def __init__(self, embedding_model, folder_name="faiss_index"):
+        self.embedding_model = embedding_model
+        self.folder_name = folder_name
+        self.path = os.path.join(config.VECTORSTORE_DIR, self.folder_name)
+        self.vectorstore = None
 
-def save_vectorstore(vectorstore, folder_name="faiss_index"):
-    """Saves the vectorstore to disk."""
-    path = os.path.join(config.VECTORSTORE_DIR, folder_name)
-    os.makedirs(path, exist_ok=True)
-    
-    # Sử dụng đường dẫn tương đối để tránh lỗi FAISS C++ với ký tự tiếng Việt (Unicode) trên Windows
-    rel_path = os.path.relpath(path, start=os.getcwd())
-    vectorstore.save_local(rel_path)
+    def create_vectorstore(self, chunks):
+        """Tạo FAISS vectorstore từ các đoạn văn bản."""
+        self.vectorstore = FAISS.from_documents(chunks, self.embedding_model)
+        return self.vectorstore
 
-def load_vectorstore(embedding_model, folder_name="faiss_index"):
-    """Loads the vectorstore from disk."""
-    path = os.path.join(config.VECTORSTORE_DIR, folder_name)
-    # Check if the actual index file exists before attempting to load
-    if os.path.exists(os.path.join(path, "index.faiss")):
-        # Sử dụng đường dẫn tương đối để tránh lỗi FAISS C++ với ký tự tiếng Việt
-        rel_path = os.path.relpath(path, start=os.getcwd())
-        return FAISS.load_local(rel_path, embedding_model, allow_dangerous_deserialization=True)
-    return None
+    def save_vectorstore(self):
+        """Lưu vectorstore xuống ổ đĩa."""
+        if self.vectorstore is None:
+            print("Lỗi: Chưa có vectorstore để lưu.")
+            return False
+            
+        os.makedirs(self.path, exist_ok=True)
+        # Sử dụng đường dẫn tương đối để tránh lỗi Unicode trên Windows
+        rel_path = os.path.relpath(self.path, start=os.getcwd())
+        self.vectorstore.save_local(rel_path)
+        return True
+
+    def load_vectorstore(self):
+        """Tải vectorstore từ ổ đĩa."""
+        index_file = os.path.join(self.path, "index.faiss")
+        if os.path.exists(index_file):
+            rel_path = os.path.relpath(self.path, start=os.getcwd())
+            self.vectorstore = FAISS.load_local(
+                rel_path, 
+                self.embedding_model, 
+                allow_dangerous_deserialization=True
+            )
+            return self.vectorstore
+        return None
+
+    def get_retriever(self, k=3):
+        """Khởi tạo retriever từ vectorstore hiện có."""
+        if self.vectorstore:
+            return self.vectorstore.as_retriever(search_kwargs={"k": k})
+        return None

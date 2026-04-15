@@ -26,7 +26,7 @@ def render_chat_interface(qa_chain):
         # 2. Process and show assistant message
         with st.chat_message("assistant"):
             with st.spinner("Đang suy nghĩ..."):
-                response = qa_chain.invoke(prompt)
+                response = qa_chain.ask(prompt)
                 
                 # Handling LCEL/RetrievalQA dictionary response
                 if isinstance(response, dict):
