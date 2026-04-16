@@ -44,21 +44,49 @@ def render_chat_interface(rag_manager):
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # 2. Gọi RAG và hiển thị câu trả lời
+        # 2. Gọi RAG và hiển thị câu trả lời dạng streaming
         with st.chat_message("assistant"):
-            with st.spinner("Đang trích xuất thông tin..."):
-                answer, sources = rag_manager.ask(
-                    prompt,
-                    conversational=conversational_mode
-                )
-                st.markdown(answer)
+            full_answer = ""
+            sources = []
+            
+            # Sử dụng st.status để hiển thị quá trình phân tích và tìm kiếm
+            with st.status("Đang khởi tạo...", expanded=True) as status:
+                # Placeholder cho các thông tin phân tích
+                analysis_area = st.empty()
+                
+                # Generator wrapper để st.write_stream có thể tiêu thụ chunks
+                def stream_generator():
+                    nonlocal full_answer, sources
+                    for packet in rag_manager.stream_ask(prompt, conversational=conversational_mode):
+                        if packet["type"] == "status":
+                            status.update(label=packet["content"])
+                        elif packet["type"] == "analysis":
+                            analysis_area.markdown(packet["content"])
+                        elif packet["type"] == "sources":
+                            sources = packet["content"]
+                        elif packet["type"] == "chunk":
+                            # Khi nhận được chunk đầu tiên, đóng status lại để tập trung vào câu trả lời
+                            status.update(label="✅ Đã xử lý xong", state="complete", expanded=False)
+                            full_answer += packet["content"]
+                            yield packet["content"]
+                        elif packet["type"] == "error":
+                            status.update(label="❌ Lỗi", state="error")
+                            st.error(packet["content"])
+                            return
+
+                # Hiển thị câu trả lời với hiệu ứng gõ chữ
+                full_answer = st.write_stream(stream_generator())
+            
+            # Hiển thị nguồn trích dẫn sau khi stream xong
+            if sources:
                 _render_sources(sources)
 
         # 3. Lưu vào lịch sử tập trung
-        add_chat_turn(
-            question=prompt,
-            answer=answer,
-            sources=sources
-        )
+        if full_answer:
+            add_chat_turn(
+                question=prompt,
+                answer=full_answer,
+                sources=sources
+            )
         # Tự động reload để cập nhật sidebar nếu cần
         st.rerun()

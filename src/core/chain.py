@@ -12,6 +12,7 @@ class RAGChainManager:
         self.retriever = None
         self.basic_chain = None       # Chain không nhớ lịch sử (Basic RAG)
         self.conv_chain = None        # Chain có nhớ lịch sử (Conversational RAG)
+        self.condense_chain = None    # Chain tóm tắt câu hỏi
         self.chat_history = []
 
         # --- Template cho Basic RAG (mỗi câu hỏi độc lập) ---
@@ -91,7 +92,7 @@ class RAGChainManager:
         if not self.retriever:
             return
 
-        condense_chain = (
+        self.condense_chain = (
             {
                 "chat_history": lambda x: self._format_chat_history(),
                 "question": RunnablePassthrough()
@@ -103,8 +104,8 @@ class RAGChainManager:
 
         self.conv_chain = (
             {
-                "context": condense_chain | self.retriever | self._format_docs,
-                "question": condense_chain
+                "context": self.condense_chain | self.retriever | self._format_docs,
+                "question": self.condense_chain
             }
             | self.conv_answer_prompt
             | self.llm
@@ -136,31 +137,76 @@ class RAGChainManager:
         - conversational=True: Dùng Conversational RAG (nhớ lịch sử)
         - conversational=False: Dùng Basic RAG (mỗi câu hỏi độc lập)
         """
-        if not self.basic_chain and not self.conv_chain:
-            return "Vui lòng tải tài liệu lên trước.", []
+        # Sử dụng stream_ask và gộp lại kết quả (để giữ tương thích ngược)
+        full_answer = ""
+        sources = []
+        for packet in self.stream_ask(question, conversational):
+            if packet["type"] == "chunk":
+                full_answer += packet["content"]
+            elif packet["type"] == "sources":
+                sources = packet["content"]
+            elif packet["type"] == "error":
+                return packet["content"], []
+        
+        return full_answer, sources
 
-        # Chọn chain dựa trên chế độ
-        if conversational and self.conv_chain:
-            chain = self.conv_chain
-        elif self.basic_chain:
-            chain = self.basic_chain
+    def stream_ask(self, question: str, conversational: bool = True):
+        """
+        Generator xử lý câu hỏi và yield các gói thông tin (status, analysis, sources, chunk).
+        Giúp UI hiển thị quá trình xử lý và streaming văn bản.
+        """
+        if not self.chain:
+            yield {"type": "error", "content": "Vui lòng tải tài liệu lên trước."}
+            return
+
+        query_for_retrieval = question
+        
+        # 1. Phân tích ngữ cảnh hội thoại (nếu có lịch sử)
+        if conversational and self.chat_history:
+            yield {"type": "status", "content": "Đang phân tích ngữ cảnh hội thoại..."}
+            if self.condense_chain:
+                query_for_retrieval = self.condense_chain.invoke(question)
+                if query_for_retrieval.strip().lower() != question.strip().lower():
+                    yield {"type": "analysis", "content": f"🔍 **Câu hỏi tối ưu:** *{query_for_retrieval}*"}
+
+        # 2. Truy xuất tài liệu
+        yield {"type": "status", "content": "Đang tìm kiếm thông tin trong tài liệu..."}
+        docs = self.retriever.invoke(query_for_retrieval)
+        sources = []
+        for doc in docs:
+            meta = doc.metadata or {}
+            sources.append({
+                "content": doc.page_content,
+                "file": meta.get("file_name", meta.get("source", "Tài liệu")),
+                "page": meta.get("page_number", meta.get("page", "?")),
+                "citation": format_document_citation(doc)
+            })
+        
+        yield {"type": "sources", "content": sources}
+
+        # 3. Tổng hợp câu trả lời
+        if not sources:
+            yield {"type": "status", "content": "Không tìm thấy thông tin trực tiếp, đang trả lời dựa trên kiến thức chung..."}
         else:
-            return "Chain chưa được khởi tạo.", []
+            yield {"type": "status", "content": "Đang tổng hợp câu trả lời từ tài liệu..."}
 
-        response = chain.invoke(question)
+        context = self._format_docs(docs)
+        prompt_template = self.conv_answer_prompt if (conversational and self.conv_chain) else self.basic_prompt
+        
+        # Khởi tạo streaming chain
+        streaming_chain = prompt_template | self.llm | StrOutputParser()
+        
+        full_answer = ""
+        for chunk in streaming_chain.stream({"context": context, "question": query_for_retrieval}):
+            full_answer += chunk
+            yield {"type": "chunk", "content": chunk}
 
-        # Trích xuất nguồn trích dẫn (Yêu cầu 5)
-        sources = self._extract_sources(question)
-
-        # Cập nhật memory nếu đang dùng chế độ conversational
+        # 4. Cập nhật lịch sử
         if conversational:
             self.chat_history.append(HumanMessage(content=question))
-            self.chat_history.append(AIMessage(content=response))
-            # Giữ tối đa 10 tin nhắn (5 cặp Q&A)
+            self.chat_history.append(AIMessage(content=full_answer))
             if len(self.chat_history) > 10:
                 self.chat_history = self.chat_history[-10:]
-
-        return response, sources
 
     def invoke(self, question: str):
         """Compatibility wrapper: trả về chỉ answer (không trả sources)."""
