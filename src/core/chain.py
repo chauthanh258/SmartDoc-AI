@@ -16,40 +16,41 @@ class RAGChainManager:
 
         # --- Template cho Basic RAG (mỗi câu hỏi độc lập) ---
         self.basic_answer_template = """Sử dụng thông tin dưới đây để trả lời câu hỏi.
-Nếu không tìm thấy câu trả lời trong ngữ cảnh, hãy nói thật thay vì bịa đặt.
-Trả lời bằng tiếng Việt, rõ ràng và đầy đủ.
+            Nếu không tìm thấy câu trả lời trong ngữ cảnh, hãy nói thật thay vì bịa đặt.
+            Trả lời bằng tiếng Việt, rõ ràng và đầy đủ.
 
-Ngữ cảnh từ tài liệu:
-{context}
+            Ngữ cảnh từ tài liệu:
+            {context}
 
-Câu hỏi: {question}
+            Câu hỏi: {question}
 
-Câu trả lời:"""
+            Câu trả lời:"""
         self.basic_prompt = ChatPromptTemplate.from_template(self.basic_answer_template)
 
         # --- Template tóm tắt lịch sử để viết lại câu hỏi (Conversational RAG) ---
         self.condense_template = """Dựa trên lịch sử hội thoại và câu hỏi mới, 
-hãy viết lại câu hỏi thành một câu hoàn chỉnh, độc lập (không cần xem lại lịch sử).
-Nếu câu hỏi đã rõ ràng, hãy giữ nguyên.
+            hãy viết lại câu hỏi thành một câu hoàn chỉnh, độc lập (không cần xem lại lịch sử).
+            Nếu câu hỏi đã rõ ràng, hãy giữ nguyên.
 
-Lịch sử hội thoại:
-{chat_history}
+            Lịch sử hội thoại:
+            {chat_history}
 
-Câu hỏi mới: {question}
-Câu hỏi độc lập:"""
+            Câu hỏi mới: {question}
+            Câu hỏi độc lập:"""
+
         self.condense_prompt = ChatPromptTemplate.from_template(self.condense_template)
 
         # --- Template trả lời cuối (Conversational RAG) ---
         self.conv_answer_template = """Sử dụng thông tin dưới đây để trả lời câu hỏi.
-Nếu không tìm thấy câu trả lời trong ngữ cảnh, hãy nói thật thay vì bịa đặt.
-Trả lời bằng tiếng Việt, rõ ràng và đầy đủ.
+            Nếu không tìm thấy câu trả lời trong ngữ cảnh, hãy nói thật thay vì bịa đặt.
+            Trả lời bằng tiếng Việt, rõ ràng và đầy đủ.
 
-Ngữ cảnh từ tài liệu:
-{context}
+            Ngữ cảnh từ tài liệu:
+            {context}
 
-Câu hỏi: {question}
+            Câu hỏi: {question}
 
-Câu trả lời:"""
+            Câu trả lời:"""
         self.conv_answer_prompt = ChatPromptTemplate.from_template(self.conv_answer_template)
 
     def _format_docs(self, docs):
@@ -68,7 +69,7 @@ Câu trả lời:"""
     def update_retriever(self, vectorstore, k: int = 3):
         """Cập nhật retriever và xây dựng lại cả 2 chains."""
         self.retriever = vectorstore.as_retriever(search_kwargs={"k": k})
-        self._build_basic_chain()
+        self._build_basic_chain() 
         self._build_conv_chain()
 
     def _build_basic_chain(self):

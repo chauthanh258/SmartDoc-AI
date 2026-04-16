@@ -12,3 +12,4 @@ torchvision
 langchain-huggingface
 docx2txt
 python-docx
+langchain-classic   
