@@ -10,52 +10,53 @@ from src.core.chain import RAGChainManager
 from src.core.llm import get_llm
 from src.ui.sidebar import render_sidebar
 from src.ui.chat_interface import render_chat_interface
-from src.utils.chat_history import init_chat_history
+from src.utils.chat_history import init_chat_history, get_chat_history
+from src.core.database import DatabaseManager
+import time
 
 # --- Cấu hình trang ---
 st.set_page_config(page_title="SmartDoc AI", page_icon="📄", layout="wide")
 
-# --- CSS tùy chỉnh (Primary: #007BFF, Secondary: #FFC107) ---
+# --- CSS tùy chỉnh (Giữ nguyên CSS của bạn) ---
 st.markdown("""
 <style>
-    .stButton>button {
-        background-color: #007BFF;
-        color: white;
-        border-radius: 5px;
-        border: none;
-        transition: all 0.3s ease;
-    }
-    .stButton>button:hover {
-        background-color: #FFC107;
-        color: black;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
-    .stExpander {
-        border-left: 4px solid #FFC107;
-        border-radius: 5px;
-    }
+    .stButton>button { background-color: #007BFF; color: white; border-radius: 5px; border: none; transition: all 0.3s ease; }
+    .stButton>button:hover { background-color: #FFC107; color: black; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    .stExpander { border-left: 4px solid #FFC107; border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📄 SmartDoc AI - Hỗ trợ tài liệu thông minh")
 
-# --- Khởi tạo Session State & Chat History ---
-init_chat_history()
-if "rag_manager" not in st.session_state:
-    st.session_state.rag_manager = None
+# --- 1. Khởi tạo Database & Session ID ---
+if "db" not in st.session_state:
+    st.session_state.db = DatabaseManager()
 
-# --- Khởi tạo các thành phần Core ---
+if "current_session_id" not in st.session_state:
+    st.session_state.current_session_id = f"session_{int(time.time())}"
+
+# --- 2. Khởi tạo Chat History ---
+init_chat_history()
+
+# --- 3. Khởi tạo Core Components ---
 embedding_model = get_embedding_model()
 llm = get_llm()
 vs_manager = VectorStoreManager(embedding_model)
 
-if st.session_state.rag_manager is None:
+if st.session_state.get("rag_manager") is None:
     st.session_state.rag_manager = RAGChainManager(llm)
 
-# --- Render Sidebar (bao gồm file uploader + settings) ---
+# --- 4. TỰ ĐỘNG NẠP KIẾN THỨC CŨ (Nếu có) ---
+# Kiểm tra nếu RAG chưa có chain nhưng ổ đĩa có FAISS thì nạp luôn
+if st.session_state.rag_manager.chain is None:
+    vectorstore = vs_manager.load_vectorstore()
+    if vectorstore:
+        st.session_state.rag_manager.update_retriever(vectorstore)
+
+# --- 5. Render Sidebar ---
 uploaded_file = render_sidebar()
 
-# --- Xử lý tài liệu được upload ---
+# --- 6. Xử lý tài liệu được upload (Cộng dồn kiến thức) ---
 if uploaded_file is not None:
     file_path = os.path.join(config.UPLOAD_DIR, uploaded_file.name)
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
@@ -63,39 +64,37 @@ if uploaded_file is not None:
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    # Thử tải vectorstore sẵn có từ disk
-    vectorstore = vs_manager.load_vectorstore()
-
-    # Nếu chưa có, xây dựng mới từ tài liệu vừa upload
-    if vectorstore is None:
-        with st.status("Đang xử lý tài liệu...", expanded=True) as status:
-            # Đọc tài liệu sử dụng bộ nạp tập trung
-            try:
-                docs = load_document(file_path)
-            except Exception as e:
-                st.error(f"Lỗi tải tài liệu: {str(e)}")
-                docs = []
-
+    with st.status("Đang cập nhật kiến thức mới...", expanded=True) as status:
+        try:
+            docs = load_document(file_path)
             if docs:
-                # Lấy chunk settings từ session_state (được set bởi components.py)
                 chunk_size = st.session_state.get("chunk_size", config.CHUNK_SIZE)
                 chunk_overlap = st.session_state.get("chunk_overlap", config.CHUNK_OVERLAP)
-
-                st.caption(f"Chunk size: **{chunk_size}** | Overlap: **{chunk_overlap}**")
-
+                
                 chunks = split_documents(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-                vectorstore = vs_manager.create_vectorstore(chunks)
+                
+                # Sử dụng add_documents để cộng dồn vào FAISS hiện tại
+                vectorstore = vs_manager.add_documents(chunks)
                 vs_manager.save_vectorstore()
-                status.update(label=f"✅ Đã xử lý {len(chunks)} đoạn văn bản!", state="complete", expanded=False)
+                
+                # Cập nhật lại bộ não AI
+                st.session_state.rag_manager.update_retriever(vectorstore)
+                status.update(label=f"✅ Đã thêm {len(chunks)} đoạn kiến thức mới!", state="complete", expanded=False)
+        except Exception as e:
+            st.error(f"Lỗi xử lý tài liệu: {str(e)}")
 
+# --- 7. Giao diện Chat ---
+history = get_chat_history()
+has_history = len(history) > 0
+rag_ready = (
+    st.session_state.rag_manager is not None and 
+    st.session_state.rag_manager.chain is not None
+)
 
-    # Cập nhật retriever cho RAG chain
-    if vectorstore:
-        st.session_state.rag_manager.update_retriever(vectorstore)
-
-# --- Giao diện Chat ---
-if st.session_state.rag_manager and st.session_state.rag_manager.chain:
+if rag_ready or has_history:
     render_chat_interface(st.session_state.rag_manager)
+    
+    if not rag_ready:
+        st.warning("⚠️ Thư viện kiến thức đang trống. Hãy tải lên tài liệu để AI có thể trả lời câu hỏi mới.")
 else:
-    st.info("Vui lòng tải lên tài liệu PDF hoặc DOCX ở thanh bên để bắt đầu trò chuyện.")
-
+    st.info("Chào mừng bạn! Hãy tải lên tài liệu ở thanh bên để bắt đầu huấn luyện AI của riêng bạn.")

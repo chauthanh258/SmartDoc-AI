@@ -36,6 +36,18 @@ def init_chat_history(
     return state
 
 
+def set_chat_history(
+    history_data: list[dict[str, Any]],
+    session_state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """
+    Ghi đè dữ liệu lịch sử từ Database vào Session State.
+    Hàm này giải quyết lỗi click vào sidebar nhưng không hiện tin nhắn.
+    """
+    state = _resolve_state(session_state)
+    state[CHAT_HISTORY_KEY] = history_data
+
+
 def register_document(
     document_id: str,
     document_name: str,

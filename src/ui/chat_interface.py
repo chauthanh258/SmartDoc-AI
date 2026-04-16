@@ -8,6 +8,7 @@ def _render_sources(sources: list):
         return
     with st.expander(f"📄 Xem nguồn trích dẫn ({len(sources)} đoạn)"):
         for idx, source in enumerate(sources):
+            # Lấy thông tin từ source (đã được normalize ở utils)
             page = source.get("page", "?")
             file = source.get("file_name", source.get("file", "Tài liệu"))
             content = source.get("snippet", source.get("content", ""))
@@ -24,14 +25,12 @@ def render_chat_interface(rag_manager):
     mode_label = "💬 Conversational RAG" if conversational_mode else "⚡ Basic RAG"
     st.header(f"Trò chuyện  —  {mode_label}")
 
-    # --- Hiển thị lịch sử hội thoại (phiên bản mới sử dụng chat_history) ---
+    # --- Hiển thị lịch sử hội thoại (Lấy từ session_state đã được sync với DB) ---
     history = get_chat_history()
     for entry in history:
-        # Hiển thị câu hỏi
         with st.chat_message("user"):
             st.markdown(entry["question"])
         
-        # Hiển thị câu trả lời
         with st.chat_message("assistant"):
             st.markdown(entry["answer"])
             if entry.get("sources"):
@@ -40,7 +39,7 @@ def render_chat_interface(rag_manager):
     # --- Ô nhập liệu ---
     if prompt := st.chat_input("Hỏi về nội dung tài liệu..."):
 
-        # 1. Hiển thị câu hỏi của người dùng ngay lập tức
+        # 1. Hiển thị câu hỏi ngay lập tức
         with st.chat_message("user"):
             st.markdown(prompt)
 
@@ -49,14 +48,12 @@ def render_chat_interface(rag_manager):
             full_answer = ""
             sources = []
             
-            # Sử dụng st.status để hiển thị quá trình phân tích và tìm kiếm
             with st.status("Đang khởi tạo...", expanded=True) as status:
-                # Placeholder cho các thông tin phân tích
                 analysis_area = st.empty()
                 
-                # Generator wrapper để st.write_stream có thể tiêu thụ chunks
                 def stream_generator():
                     nonlocal full_answer, sources
+                    # Thực hiện stream từ RAG Manager
                     for packet in rag_manager.stream_ask(prompt, conversational=conversational_mode):
                         if packet["type"] == "status":
                             status.update(label=packet["content"])
@@ -65,28 +62,45 @@ def render_chat_interface(rag_manager):
                         elif packet["type"] == "sources":
                             sources = packet["content"]
                         elif packet["type"] == "chunk":
-                            # Khi nhận được chunk đầu tiên, đóng status lại để tập trung vào câu trả lời
                             status.update(label="✅ Đã xử lý xong", state="complete", expanded=False)
-                            full_answer += packet["content"]
                             yield packet["content"]
                         elif packet["type"] == "error":
                             status.update(label="❌ Lỗi", state="error")
                             st.error(packet["content"])
                             return
 
-                # Hiển thị câu trả lời với hiệu ứng gõ chữ
+                # write_stream sẽ trả về nội dung text đầy đủ sau khi stream kết thúc
                 full_answer = st.write_stream(stream_generator())
             
-            # Hiển thị nguồn trích dẫn sau khi stream xong
             if sources:
                 _render_sources(sources)
 
-        # 3. Lưu vào lịch sử tập trung
+        # 3. LƯU DỮ LIỆU VÀO CẢ SESSION VÀ SQLITE
         if full_answer:
-            add_chat_turn(
+            # Lưu vào bộ nhớ tạm (st.session_state["messages"])
+            entry = add_chat_turn(
                 question=prompt,
                 answer=full_answer,
                 sources=sources
             )
-        # Tự động reload để cập nhật sidebar nếu cần
-        st.rerun()
+            
+            # Lưu vĩnh viễn vào SQLite
+            if "db" in st.session_state and "current_session_id" in st.session_state:
+                session_id = st.session_state.current_session_id
+                try:
+                    # A. Nếu đây là tin nhắn đầu tiên của session, tạo mới bản ghi trong bảng 'sessions'
+                    # Điều này giúp sidebar có tiêu đề để hiển thị
+                    current_history = get_chat_history()
+                    if len(current_history) == 1:
+                        # Lấy 40 ký tự đầu của prompt làm tiêu đề chat
+                        chat_title = prompt[:40] + ("..." if len(prompt) > 40 else "")
+                        st.session_state.db.create_session(session_id, chat_title)
+                    
+                    # B. Lưu chi tiết tin nhắn vào bảng 'chat_turns'
+                    st.session_state.db.save_chat_turn(session_id, entry)
+                    
+                except Exception as e:
+                    st.warning(f"Lưu vào DB thất bại: {e}")
+
+        # Rerun để đồng bộ trạng thái Sidebar và lịch sử mới
+        st.rerun()

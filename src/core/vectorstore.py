@@ -112,37 +112,34 @@ class VectorStoreManager:
         self.path = os.path.join(config.VECTORSTORE_DIR, self.folder_name)
         self.vectorstore = None
 
-    def create_vectorstore(self, chunks: list[Document], append: bool = False):
-        """Create or append chunks into FAISS vectorstore.
-
-        Args:
-            chunks: Chunked LangChain documents with metadata.
-            append: If True and index already exists in memory, add documents
-                instead of rebuilding from scratch.
-        """
-        if append and self.vectorstore is not None:
-            self.vectorstore.add_documents(chunks)
-            return self.vectorstore
-
+    def create_vectorstore(self, chunks: list[Document], append: bool = True):
+        """Tạo mới hoặc thêm vào vectorstore hiện có."""
+        if append:
+            # Sử dụng hàm add_documents để tự động xử lý việc load và cộng dồn
+            return self.add_documents(chunks)
+        
+        # Nếu append=False, ghi đè hoàn toàn
         self.vectorstore = FAISS.from_documents(chunks, self.embedding_model)
         return self.vectorstore
 
     def add_documents(self, chunks: list[Document]):
-        """Add new chunks into existing index; create one if needed."""
+        """Cộng dồn tài liệu mới vào bộ nhớ hiện tại."""
+        # 1. Nếu RAM chưa có, thử load từ ổ đĩa
         if self.vectorstore is None:
-            # Attempt loading persisted index first so app sessions can append.
             self.load_vectorstore()
 
+        # 2. Nếu sau khi load vẫn None (nghĩa là chưa từng có index nào)
         if self.vectorstore is None:
-            return self.create_vectorstore(chunks, append=False)
-
-        self.vectorstore.add_documents(chunks)
+            self.vectorstore = FAISS.from_documents(chunks, self.embedding_model)
+        else:
+            # 3. Nếu đã có, thêm vào kiến thức hiện tại
+            self.vectorstore.add_documents(chunks)
+        
         return self.vectorstore
 
     def save_vectorstore(self):
-        """Lưu vectorstore xuống ổ đĩa."""
+        """Lưu toàn bộ bộ nhớ xuống ổ đĩa."""
         if self.vectorstore is None:
-            print("Lỗi: Chưa có vectorstore để lưu.")
             return False
             
         os.makedirs(self.path, exist_ok=True)
@@ -150,15 +147,18 @@ class VectorStoreManager:
         return True
 
     def load_vectorstore(self):
-        """Tải vectorstore từ ổ đĩa."""
+        """Tải dữ liệu từ ổ đĩa vào RAM."""
         index_file = os.path.join(self.path, "index.faiss")
         if os.path.exists(index_file):
-            self.vectorstore = FAISS.load_local(
-                self.path,
-                self.embedding_model,
-                allow_dangerous_deserialization=True
-            )
-            return self.vectorstore
+            try:
+                self.vectorstore = FAISS.load_local(
+                    self.path,
+                    self.embedding_model,
+                    allow_dangerous_deserialization=True
+                )
+                return self.vectorstore
+            except Exception as e:
+                print(f"Lỗi khi nạp FAISS: {e}")
         return None
 
     def similarity_search(
