@@ -267,18 +267,39 @@ def _normalize_source_item(
         snippet_raw = source.get("snippet") or source.get("content") or ""
         source_id = source.get("source_id")
         document_id = source.get("document_id") or metadata.get("document_id")
-        document_name = source.get("document_name") or source.get("file_name")
-        page = source.get("page", metadata.get("page"))
-        chunk_id = source.get("chunk_id", metadata.get("chunk_id"))
+        document_name = (
+            source.get("document_name")
+            or source.get("file_name")
+            or source.get("filename")
+            or source.get("file")
+            or metadata.get("document_name")
+            or metadata.get("file_name")
+            or metadata.get("filename")
+            or metadata.get("source")
+        )
+        page = source.get("page")
+        if page is None:
+            page = metadata.get("page_number", metadata.get("page"))
+        chunk_id = source.get("chunk_id")
+        if chunk_id is None:
+            chunk_id = source.get(
+                "chunk_index",
+                metadata.get("chunk_id", metadata.get("chunk_index")),
+            )
         score = source.get("score", metadata.get("score"))
     elif hasattr(source, "metadata") and hasattr(source, "page_content"):
         metadata = ensure_dict(getattr(source, "metadata", {}))
         snippet_raw = getattr(source, "page_content", "")
         source_id = metadata.get("source_id")
         document_id = metadata.get("document_id")
-        document_name = metadata.get("document_name") or metadata.get("source")
-        page = metadata.get("page")
-        chunk_id = metadata.get("chunk_id")
+        document_name = (
+            metadata.get("document_name")
+            or metadata.get("file_name")
+            or metadata.get("filename")
+            or metadata.get("source")
+        )
+        page = metadata.get("page_number", metadata.get("page"))
+        chunk_id = metadata.get("chunk_id", metadata.get("chunk_index"))
         score = metadata.get("score")
     else:
         metadata = {}
@@ -296,6 +317,15 @@ def _normalize_source_item(
     if final_document_name:
         final_file_name = Path(str(final_document_name)).name
     else:
+        final_file_name = None
+
+    if final_file_name and final_file_name.strip().lower() in {
+        "none",
+        "null",
+        "nan",
+        "na",
+        "n/a",
+    }:
         final_file_name = None
 
     normalized_source_id = str(source_id or f"src-{index + 1}")

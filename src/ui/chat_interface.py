@@ -16,8 +16,13 @@ def _render_sources(sources: list):
         return
     with st.expander(f"📄 Xem nguồn trích dẫn ({len(sources)} đoạn)"):
         for idx, source in enumerate(sources):
-            page = source.get("page", "?")
-            file = source.get("file_name", source.get("file", "Tài liệu"))
+            page = source.get("page") or source.get("page_number") or "?"
+            file = (
+                source.get("file_name")
+                or source.get("file")
+                or source.get("document_name")
+                or "Tài liệu"
+            )
             content = source.get("snippet", source.get("content", ""))
             st.markdown(
                 f"**Nguồn {idx + 1}:** `{file}` — Trang {page}",
