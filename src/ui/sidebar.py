@@ -4,6 +4,30 @@ import os
 import config
 import shutil
 from src.ui.components import render_settings_panel, render_document_filter
+from src.utils.chat_history import (
+    clear_chat_history,
+    create_conversation,
+    delete_conversation,
+    get_active_conversation_id,
+    get_chat_history,
+    list_conversations,
+    rename_conversation,
+    set_active_conversation,
+)
+
+
+def _trim_label(text: str, max_len: int = 30) -> str:
+    """Trim long labels so conversation list remains compact in sidebar."""
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."
+
+
+def _format_timestamp(iso_timestamp: str) -> str:
+    """Format stored ISO timestamp for quick history preview."""
+    if not iso_timestamp:
+        return "-"
+    return iso_timestamp.replace("T", " ")[:19]
 
 
 def render_sidebar(vs_manager=None):
@@ -11,7 +35,7 @@ def render_sidebar(vs_manager=None):
     Render toàn bộ sidebar.
     Phase 1: Instructions, Status, File uploader, History, Manager.
     Phase 2: Settings panel (chunk, conversational mode).
-    Phase 3: Multi-file uploader, Document filter.
+    Phase 3: Multi-file uploader, Document filter, Conversation management.
     Trả về (uploaded_files, selected_docs).
     """
     with st.sidebar:
@@ -62,17 +86,107 @@ def render_sidebar(vs_manager=None):
 
         st.divider()
 
-        # ── Lịch sử hội thoại ─────────────────────────────────────────────
-        st.subheader("💬 Lịch sử hội thoại")
-        user_msgs = [m for m in st.session_state.get("messages", []) if m["role"] == "user"]
-        if not user_msgs:
-            st.caption("Chưa có lịch sử hội thoại.")
+        # --- Bộ nhớ hội thoại theo conversation ---
+        st.subheader("💬 Cuộc trò chuyện")
+
+        if st.button("➕ Trò chuyện mới", use_container_width=True):
+            create_conversation()
+            if st.session_state.get("rag_manager"):
+                st.session_state.rag_manager.clear_history()
+            st.rerun()
+
+        conversations = list_conversations()
+        active_conversation_id = get_active_conversation_id()
+
+        if not conversations:
+            st.caption("Chưa có conversation nào.")
         else:
-            st.caption(f"Có **{len(user_msgs)}** câu hỏi trong phiên này.")
+            with st.container(height=220):
+                for conversation in conversations:
+                    conversation_id = conversation["id"]
+                    conversation_name = conversation.get("name", "Untitled")
+                    is_active = conversation_id == active_conversation_id
+
+                    col1, col2, col3 = st.columns([0.68, 0.16, 0.16])
+
+                    prefix = "●" if is_active else "○"
+                    label = f"{prefix} {_trim_label(conversation_name)}"
+
+                    if col1.button(
+                        label,
+                        key=f"select_conversation_{conversation_id}",
+                        use_container_width=True,
+                        help=conversation_name,
+                    ):
+                        if set_active_conversation(conversation_id):
+                            if st.session_state.get("rag_manager"):
+                                st.session_state.rag_manager.clear_history()
+                        st.rerun()
+
+                    if col2.button("✏️", key=f"rename_conversation_btn_{conversation_id}", use_container_width=True):
+                        st.session_state["rename_conversation_id"] = conversation_id
+                        st.session_state["rename_conversation_value"] = conversation_name
+
+                    if col3.button("🗑️", key=f"delete_conversation_btn_{conversation_id}", use_container_width=True):
+                        st.session_state["delete_conversation_id"] = conversation_id
+
+                    st.caption(f"{conversation.get('turn_count', 0)} lượt hỏi")
+
+        rename_conversation_id = st.session_state.get("rename_conversation_id")
+        if rename_conversation_id:
+            st.markdown("**Đổi tên conversation**")
+            st.text_input("Tên mới", key="rename_conversation_value")
+
+            c1, c2 = st.columns(2)
+            if c1.button("✅ Lưu", key="rename_conversation_confirm"):
+                new_name = st.session_state.get("rename_conversation_value", "")
+                if rename_conversation(rename_conversation_id, new_name):
+                    st.session_state.pop("rename_conversation_id", None)
+                    st.session_state.pop("rename_conversation_value", None)
+                    st.rerun()
+                else:
+                    st.error("Tên conversation không hợp lệ.")
+
+            if c2.button("❌ Hủy", key="rename_conversation_cancel"):
+                st.session_state.pop("rename_conversation_id", None)
+                st.session_state.pop("rename_conversation_value", None)
+                st.rerun()
+
+        delete_conversation_id = st.session_state.get("delete_conversation_id")
+        if delete_conversation_id:
+            conversation_name = next(
+                (
+                    conversation.get("name", "Conversation")
+                    for conversation in conversations
+                    if conversation.get("id") == delete_conversation_id
+                ),
+                "Conversation",
+            )
+            st.warning(f"Xóa '{conversation_name}'?")
+            d1, d2 = st.columns(2)
+            if d1.button("✅ Xóa", key="delete_conversation_confirm"):
+                delete_conversation(delete_conversation_id)
+                st.session_state.pop("delete_conversation_id", None)
+                if st.session_state.get("rag_manager"):
+                    st.session_state.rag_manager.clear_history()
+                st.rerun()
+            if d2.button("❌ Hủy", key="delete_conversation_cancel"):
+                st.session_state.pop("delete_conversation_id", None)
+                st.rerun()
+
+        st.divider()
+
+        st.subheader("🕒 Lịch sử conversation hiện tại")
+        history = get_chat_history()
+        if not history:
+            st.caption("Conversation hiện tại chưa có câu hỏi.")
+        else:
+            st.caption(f"Có **{len(history)}** câu hỏi trong conversation đang chọn.")
             with st.container(height=180):
-                for msg in user_msgs:
-                    label = msg["content"][:45] + "..." if len(msg["content"]) > 45 else msg["content"]
-                    st.markdown(f"👤 {label}", help=msg["content"])
+                for entry in reversed(history[-10:]):
+                    timestamp = _format_timestamp(entry.get("timestamp", ""))
+                    question = entry.get("question", "")
+                    st.markdown(f"`{timestamp}`  👤 {_trim_label(question, max_len=45)}", help=question)
 
         st.divider()
 
@@ -83,14 +197,14 @@ def render_sidebar(vs_manager=None):
         if "confirm_clear_chat" not in st.session_state:
             st.session_state.confirm_clear_chat = False
 
-        if st.button("🗑️ Xóa Lịch sử Hội thoại", use_container_width=True):
+        if st.button("🗑️ Xóa Tất cả Hội thoại", use_container_width=True):
             st.session_state.confirm_clear_chat = True
 
         if st.session_state.confirm_clear_chat:
-            st.warning("Bạn có chắc muốn xóa toàn bộ lịch sử chat?")
+            st.warning("Bạn có chắc muốn xóa toàn bộ conversations?")
             col1, col2 = st.columns(2)
             if col1.button("✅ Có, Xóa", key="yes_chat"):
-                st.session_state.messages = []
+                clear_chat_history(clear_all_conversations=True)
                 if st.session_state.get("rag_manager"):
                     st.session_state.rag_manager.clear_history()
                 st.session_state.confirm_clear_chat = False
@@ -114,7 +228,7 @@ def render_sidebar(vs_manager=None):
                 if os.path.exists(vs_path):
                     shutil.rmtree(vs_path)
                 st.session_state.rag_manager = None
-                st.session_state.messages = []
+                clear_chat_history(clear_all_conversations=True)
                 st.session_state.confirm_clear_vs = False
                 st.success("Đã xóa dữ liệu Vector Store!")
                 st.rerun()
