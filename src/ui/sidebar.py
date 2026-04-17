@@ -35,7 +35,7 @@ def render_sidebar(vs_manager=None):
     Render toàn bộ sidebar.
     Phase 1: Instructions, Status, File uploader, History, Manager.
     Phase 2: Settings panel (chunk, conversational mode).
-    Phase 3: Multi-file uploader, Document filter, Hybrid Search.
+    Phase 3: Multi-file uploader, Document filter, Hybrid Search, Conversation management.
     Trả về (uploaded_files, selected_docs).
     """
     with st.sidebar:
