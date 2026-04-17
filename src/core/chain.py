@@ -1,9 +1,11 @@
 # src/core/chain.py
+from pathlib import Path
+
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
-from src.core.citation import format_document_citation
+from src.core.citation import extract_citation_data, format_citation
 
 
 class RAGChainManager:
@@ -67,6 +69,59 @@ class RAGChainManager:
                 buffer += f"AI: {message.content}\n"
         return buffer
 
+    def _build_sources_from_docs(self, docs: list) -> list[dict]:
+        """Build stable, deduplicated source records from retrieved documents."""
+        sources: list[dict] = []
+        seen_citations: set[str] = set()
+
+        for doc in docs:
+            meta = dict(doc.metadata or {})
+            citation_data = extract_citation_data(doc)
+
+            raw_file_name = (
+                citation_data.get("file_name")
+                or meta.get("filename")
+                or meta.get("file_name")
+                or meta.get("file")
+                or meta.get("document_name")
+                or meta.get("source")
+            )
+
+            file_name = Path(str(raw_file_name)).name if raw_file_name else "unknown_source"
+
+            # Prepare citation data with resilient fallback so UI never gets None filename.
+            citation_payload = {
+                **citation_data,
+                "file_name": file_name,
+                "page_number": citation_data.get("page_number"),
+                "section": citation_data.get("section"),
+            }
+            citation_label = format_citation(citation_payload)
+
+            # Remove duplicate sources by citation text (same page/section + file).
+            if citation_label in seen_citations:
+                continue
+            seen_citations.add(citation_label)
+
+            page_value = citation_data.get("page_number")
+            if page_value is None:
+                page_value = meta.get("page_number", meta.get("page", "?"))
+
+            sources.append(
+                {
+                    "content": doc.page_content,
+                    "snippet": doc.page_content,
+                    "file": file_name,
+                    "file_name": file_name,
+                    "page": page_value,
+                    "chunk_index": citation_data.get("chunk_index"),
+                    "citation": citation_label,
+                    "metadata": meta,
+                }
+            )
+
+        return sources
+
     def update_retriever(self, vectorstore, k: int = 3):
         """Cập nhật retriever và xây dựng lại cả 2 chains."""
         self.retriever = vectorstore.as_retriever(search_kwargs={"k": k})
@@ -124,16 +179,7 @@ class RAGChainManager:
             return []
         try:
             docs = self.retriever.invoke(question)
-            sources = []
-            for doc in docs:
-                meta = doc.metadata or {}
-                sources.append({
-                    "content": doc.page_content,
-                    "file": meta.get("file_name", meta.get("source", "Tài liệu")),
-                    "page": meta.get("page_number", meta.get("page", "?")),
-                    "citation": format_document_citation(doc)
-                })
-            return sources
+            return self._build_sources_from_docs(docs)
         except Exception:
             return []
 
@@ -178,15 +224,7 @@ class RAGChainManager:
         # 2. Truy xuất tài liệu
         yield {"type": "status", "content": "Đang tìm kiếm thông tin trong tài liệu..."}
         docs = self.retriever.invoke(query_for_retrieval)
-        sources = []
-        for doc in docs:
-            meta = doc.metadata or {}
-            sources.append({
-                "content": doc.page_content,
-                "file": meta.get("file_name", meta.get("source", "Tài liệu")),
-                "page": meta.get("page_number", meta.get("page", "?")),
-                "citation": format_document_citation(doc)
-            })
+        sources = self._build_sources_from_docs(docs)
         
         yield {"type": "sources", "content": sources}
 

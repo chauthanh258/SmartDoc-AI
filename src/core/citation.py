@@ -4,6 +4,34 @@ from typing import Any, Mapping, Sequence
 from langchain_core.documents import Document
 
 
+_INVALID_TEXT_VALUES = {"", "none", "null", "nan", "na", "n/a"}
+
+
+def _normalize_text_or_none(value: Any) -> str | None:
+    """Convert value to a meaningful non-empty text string when possible."""
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if text.lower() in _INVALID_TEXT_VALUES:
+        return None
+    return text
+
+
+def _resolve_file_name(metadata: Mapping[str, Any]) -> str | None:
+    """Resolve filename from multiple metadata conventions used in the project."""
+    raw_name = (
+        _normalize_text_or_none(metadata.get("file_name"))
+        or _normalize_text_or_none(metadata.get("filename"))
+        or _normalize_text_or_none(metadata.get("file"))
+        or _normalize_text_or_none(metadata.get("document_name"))
+        or _normalize_text_or_none(metadata.get("source"))
+    )
+    if not raw_name:
+        return None
+    return Path(raw_name).name
+
+
 def _to_int_or_none(value: Any) -> int | None:
     """Best-effort conversion of metadata values to int."""
     if value is None:
@@ -25,10 +53,7 @@ def extract_citation_data(document: Document) -> dict[str, Any]:
     """
     metadata = dict(document.metadata or {})
 
-    source = metadata.get("source")
-    file_name = metadata.get("file_name")
-    if not file_name and source:
-        file_name = Path(str(source)).name
+    file_name = _resolve_file_name(metadata)
 
     page_number = _to_int_or_none(metadata.get("page_number"))
     if page_number is None:
@@ -54,7 +79,7 @@ def format_citation(metadata: Mapping[str, Any]) -> str:
     For DOCX sections (no page number), the format becomes:
     [Muc Gioi thieu - sample.docx]
     """
-    file_name = metadata.get("file_name") or "unknown_source"
+    file_name = _resolve_file_name(metadata) or "unknown_source"
     page_number = _to_int_or_none(metadata.get("page_number"))
     section = metadata.get("section")
 
