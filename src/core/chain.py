@@ -70,6 +70,12 @@ class RAGChainManager:
     def update_retriever(self, vectorstore, k: int = 3):
         """Cập nhật retriever và xây dựng lại cả 2 chains."""
         self.retriever = vectorstore.as_retriever(search_kwargs={"k": k})
+        self._build_basic_chain()
+        self._build_conv_chain()
+
+    def update_retriever_direct(self, retriever):
+        """Nhận thẳng retriever object (đã được filter/hybrid) từ bên ngoài."""
+        self.retriever = retriever
         self._build_basic_chain() 
         self._build_conv_chain()
 
