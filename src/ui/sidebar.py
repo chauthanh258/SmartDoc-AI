@@ -3,7 +3,7 @@ import streamlit as st
 import os
 import config
 import shutil
-from src.ui.components import render_settings_panel
+from src.ui.components import render_settings_panel, render_document_filter
 from src.utils.chat_history import (
     clear_chat_history,
     create_conversation,
@@ -29,62 +29,64 @@ def _format_timestamp(iso_timestamp: str) -> str:
         return "-"
     return iso_timestamp.replace("T", " ")[:19]
 
-def render_sidebar(vs_manager):
+
+def render_sidebar(vs_manager=None):
+    """
+    Render toàn bộ sidebar.
+    Phase 1: Instructions, Status, File uploader, History, Manager.
+    Phase 2: Settings panel (chunk, conversational mode).
+    Phase 3: Multi-file uploader, Document filter, Hybrid Search, Conversation management.
+    Trả về (uploaded_files, selected_docs).
+    """
     with st.sidebar:
         st.header("📄 SmartDoc AI")
         st.markdown(
             """
             **Hướng dẫn sử dụng:**
-            1. Tải lên một tệp PDF hoặc DOCX.
-            2. Hệ thống sẽ tự động xử lý tài liệu.
-            3. Trò chuyện ở cửa sổ bên cạnh.
+            1. Tải lên một hoặc nhiều tệp PDF/DOCX.
+            2. Hệ thống tự động xử lý và lập chỉ mục.
+            3. Chọn tài liệu cần truy vấn (hoặc để tìm tất cả).
+            4. Đặt câu hỏi ở cửa sổ bên cạnh.
             """
         )
         st.divider()
 
-        # --- Trạng thái hệ thống ---
+        # ── Trạng thái hệ thống ────────────────────────────────────────────
         st.subheader("🖥️ Trạng thái")
         st.info(f"LLM: `{config.LLM_MODEL}`")
         st.info(f"Embeddings: `{config.EMBEDDING_MODEL.split('/')[-1]}`")
 
         st.divider()
 
-        # --- Tải tài liệu ---
+        # ── Tải tài liệu (Phase 3: multiple=True) ─────────────────────────
         st.subheader("📂 Tài liệu")
-        uploaded_file = st.file_uploader(
-            "Tải lên tài liệu mới",
+        uploaded_files = st.file_uploader(
+            "Tải lên tài liệu (PDF/DOCX)",
             type=["pdf", "docx"],
-            help="Chỉ hỗ trợ định dạng PDF và DOCX."
+            accept_multiple_files=True,
+            help="Hỗ trợ nhiều file cùng lúc. Tối đa 200MB mỗi file.",
+            key="file_uploader",
         )
 
-        st.divider()
-
-        # --- Quản lý tài liệu (Kho tri thức) ---
-        st.subheader("📚 Kho tri thức")
-        docs_registry = vs_manager.get_document_registry()
-        if not docs_registry:
-            st.info("Chưa có tài liệu nào trong bộ nhớ.")
-        else:
-            st.caption(f"Đang lưu trữ **{len(docs_registry)}** tài liệu.")
-            for doc in docs_registry:
-                # Tạo label gọn gàng
-                fname = doc['filename']
-                if len(fname) > 25:
-                    fname = fname[:22] + "..."
-                
-                with st.expander(f"📄 {fname}", expanded=False):
-                    st.write(f"**Số đoạn:** `{doc['chunk_count']}`")
-                    st.write(f"**Ngôn ngữ:** `{doc.get('language', 'Không rõ')}`")
-                    st.write(f"**Ngày tải:** `{doc.get('upload_date_only', 'N/A')}`")
+        if uploaded_files:
+            st.caption(f"Đã chọn **{len(uploaded_files)}** tệp:")
+            for f in uploaded_files:
+                size_mb = f.size / (1024 * 1024)
+                st.caption(f"  📄 {f.name} ({size_mb:.1f} MB)")
 
         st.divider()
 
-        # --- Panel cài đặt nâng cao (Phase 2 - Yêu cầu 4) ---
+        # ── Cài đặt nâng cao (Phase 2 + 3) ────────────────────────────────
         render_settings_panel()
 
         st.divider()
 
-        # --- Bộ nhớ hội thoại theo conversation ---
+        # ── Bộ lọc tài liệu (Phase 3) ─────────────────────────────────────
+        selected_docs = render_document_filter(vs_manager)
+
+        st.divider()
+
+        # ── Quản lý Conversations ──────────────────────────────────────────
         st.subheader("💬 Cuộc trò chuyện")
 
         if st.button("➕ Trò chuyện mới", use_container_width=True):
@@ -130,6 +132,7 @@ def render_sidebar(vs_manager):
 
                     st.caption(f"{conversation.get('turn_count', 0)} lượt hỏi")
 
+        # Form đổi tên conversation
         rename_conversation_id = st.session_state.get("rename_conversation_id")
         if rename_conversation_id:
             st.markdown("**Đổi tên conversation**")
@@ -150,6 +153,7 @@ def render_sidebar(vs_manager):
                 st.session_state.pop("rename_conversation_value", None)
                 st.rerun()
 
+        # Confirm xóa conversation
         delete_conversation_id = st.session_state.get("delete_conversation_id")
         if delete_conversation_id:
             conversation_name = next(
@@ -174,7 +178,8 @@ def render_sidebar(vs_manager):
 
         st.divider()
 
-        st.subheader("🕒 Lịch sử conversation hiện tại")
+        # ── Lịch sử conversation hiện tại ─────────────────────────────────
+        st.subheader("🕒 Lịch sử trò chuyện")
         history = get_chat_history()
         if not history:
             st.caption("Conversation hiện tại chưa có câu hỏi.")
@@ -188,10 +193,10 @@ def render_sidebar(vs_manager):
 
         st.divider()
 
-        # --- Trình quản lý ---
+        # ── Trình quản lý ──────────────────────────────────────────────────
         st.subheader("🛠️ Trình quản lý")
 
-        # 1. Xóa lịch sử hội thoại (có confirm)
+        # Nút 1: Xóa toàn bộ conversations (có confirm)
         if "confirm_clear_chat" not in st.session_state:
             st.session_state.confirm_clear_chat = False
 
@@ -203,7 +208,6 @@ def render_sidebar(vs_manager):
             col1, col2 = st.columns(2)
             if col1.button("✅ Có, Xóa", key="yes_chat"):
                 clear_chat_history(clear_all_conversations=True)
-                # Xóa cả chat_history trong rag_manager nếu có
                 if st.session_state.get("rag_manager"):
                     st.session_state.rag_manager.clear_history()
                 st.session_state.confirm_clear_chat = False
@@ -212,7 +216,7 @@ def render_sidebar(vs_manager):
                 st.session_state.confirm_clear_chat = False
                 st.rerun()
 
-        # 2. Xóa Vector Store (có confirm)
+        # Nút 2: Xóa Vector Store (có confirm)
         if "confirm_clear_vs" not in st.session_state:
             st.session_state.confirm_clear_vs = False
 
@@ -227,7 +231,7 @@ def render_sidebar(vs_manager):
                 if os.path.exists(vs_path):
                     shutil.rmtree(vs_path)
                 st.session_state.rag_manager = None
-                clear_chat_history(clear_all_conversations=True) # Xóa luôn chat khi xóa VS
+                clear_chat_history(clear_all_conversations=True)
                 st.session_state.confirm_clear_vs = False
                 st.success("Đã xóa dữ liệu Vector Store!")
                 st.rerun()
@@ -235,5 +239,4 @@ def render_sidebar(vs_manager):
                 st.session_state.confirm_clear_vs = False
                 st.rerun()
 
-        return uploaded_file
-
+        return uploaded_files, selected_docs

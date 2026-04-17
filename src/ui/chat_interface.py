@@ -11,9 +11,13 @@ from src.utils.chat_history import (
 
 
 def _render_sources(sources: list):
-    """Hiển thị danh sách nguồn trích dẫn bên dưới câu trả lời."""
+    """
+    Hiển thị nguồn trích dẫn kèm tên file và số trang (Yêu cầu 5 & 8).
+    Dùng st.expander để gọn gàng.
+    """
     if not sources:
         return
+
     with st.expander(f"📄 Xem nguồn trích dẫn ({len(sources)} đoạn)"):
         for idx, source in enumerate(sources):
             page = source.get("page") or source.get("page_number") or "?"
@@ -47,8 +51,16 @@ def _sync_rag_history(rag_manager, history: list[dict]):
 def render_chat_interface(rag_manager):
     """Giao diện chat chính, hiển thị lịch sử và nhận câu hỏi."""
     conversational_mode = st.session_state.get("conversational_mode", True)
-    mode_label = "💬 Conversational RAG" if conversational_mode else "⚡ Basic RAG"
-    st.header(f"Trò chuyện  —  {mode_label}")
+    hybrid = st.session_state.get("hybrid_search", False)
+    rerank = st.session_state.get("reranking", False)
+
+    mode_parts = ["💬 Conv. RAG" if conversational_mode else "⚡ Basic RAG"]
+    if hybrid:
+        mode_parts.append("🔀 Hybrid")
+    if rerank:
+        mode_parts.append("📊 Re-ranked")
+
+    st.header(f"Trò chuyện  —  {' · '.join(mode_parts)}")
 
     active_conversation = get_active_conversation()
     history = get_chat_history()
@@ -82,10 +94,13 @@ def render_chat_interface(rag_manager):
         with st.chat_message("assistant"):
             full_answer = ""
             sources = []
-
+            
+            # Sử dụng st.status để hiển thị quá trình phân tích và tìm kiếm
             with st.status("Đang khởi tạo...", expanded=True) as status:
+                # Placeholder cho các thông tin phân tích
                 analysis_area = st.empty()
-
+                
+                # Generator wrapper để st.write_stream có thể tiêu thụ chunks
                 def stream_generator():
                     nonlocal full_answer, sources
                     for packet in rag_manager.stream_ask(prompt, conversational=conversational_mode):
@@ -96,6 +111,7 @@ def render_chat_interface(rag_manager):
                         elif packet["type"] == "sources":
                             sources = packet["content"]
                         elif packet["type"] == "chunk":
+                            # Khi nhận được chunk đầu tiên, đóng status lại để tập trung vào câu trả lời
                             status.update(label="✅ Đã xử lý xong", state="complete", expanded=False)
                             full_answer += packet["content"]
                             yield packet["content"]
@@ -104,18 +120,19 @@ def render_chat_interface(rag_manager):
                             st.error(packet["content"])
                             return
 
+                # Hiển thị câu trả lời với hiệu ứng gõ chữ
                 full_answer = st.write_stream(stream_generator())
-
+            
+            # Hiển thị nguồn trích dẫn sau khi stream xong
             if sources:
                 _render_sources(sources)
 
+        # 3. Lưu vào lịch sử tập trung
         if full_answer:
             add_chat_turn(
                 question=prompt,
                 answer=full_answer,
-                sources=sources,
-                conversation_id=active_conversation.get("id") if active_conversation else None,
-                metadata={"conversational_mode": conversational_mode},
+                sources=sources
             )
-
+        # Tự động reload để cập nhật sidebar nếu cần
         st.rerun()
