@@ -29,7 +29,7 @@ def _format_timestamp(iso_timestamp: str) -> str:
         return "-"
     return iso_timestamp.replace("T", " ")[:19]
 
-def render_sidebar():
+def render_sidebar(vs_manager):
     with st.sidebar:
         st.header("📄 SmartDoc AI")
         st.markdown(
@@ -56,6 +56,26 @@ def render_sidebar():
             type=["pdf", "docx"],
             help="Chỉ hỗ trợ định dạng PDF và DOCX."
         )
+
+        st.divider()
+
+        # --- Quản lý tài liệu (Kho tri thức) ---
+        st.subheader("📚 Kho tri thức")
+        docs_registry = vs_manager.get_document_registry()
+        if not docs_registry:
+            st.info("Chưa có tài liệu nào trong bộ nhớ.")
+        else:
+            st.caption(f"Đang lưu trữ **{len(docs_registry)}** tài liệu.")
+            for doc in docs_registry:
+                # Tạo label gọn gàng
+                fname = doc['filename']
+                if len(fname) > 25:
+                    fname = fname[:22] + "..."
+                
+                with st.expander(f"📄 {fname}", expanded=False):
+                    st.write(f"**Số đoạn:** `{doc['chunk_count']}`")
+                    st.write(f"**Ngôn ngữ:** `{doc.get('language', 'Không rõ')}`")
+                    st.write(f"**Ngày tải:** `{doc.get('upload_date_only', 'N/A')}`")
 
         st.divider()
 
