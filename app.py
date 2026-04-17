@@ -52,8 +52,13 @@ vs_manager = VectorStoreManager(embedding_model)
 if st.session_state.rag_manager is None:
     st.session_state.rag_manager = RAGChainManager(llm)
 
-# --- Render Sidebar (bao gồm file uploader + settings) ---
-uploaded_file = render_sidebar()
+# --- Luôn đồng bộ Vector Store sẵn có vào RAG Manager ---
+vectorstore = vs_manager.load_vectorstore()
+if vectorstore:
+    st.session_state.rag_manager.update_retriever(vectorstore)
+
+# --- Render Sidebar (bao gồm file uploader + settings + document management) ---
+uploaded_file = render_sidebar(vs_manager)
 
 # --- Xử lý tài liệu được upload ---
 if uploaded_file is not None:
@@ -63,35 +68,32 @@ if uploaded_file is not None:
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    # Thử tải vectorstore sẵn có từ disk
-    vectorstore = vs_manager.load_vectorstore()
+    # Kiểm tra xem file này đã được index chưa
+    existing_docs = vs_manager.get_document_registry()
+    is_already_indexed = any(d.get("filename") == uploaded_file.name for d in existing_docs)
 
-    # Nếu chưa có, xây dựng mới từ tài liệu vừa upload
-    if vectorstore is None:
-        with st.status("Đang xử lý tài liệu...", expanded=True) as status:
-            # Đọc tài liệu sử dụng bộ nạp tập trung
+    if not is_already_indexed:
+        with st.status("Đang phân tích tài liệu mới...", expanded=True) as status:
             try:
                 docs = load_document(file_path)
+                if docs:
+                    chunk_size = st.session_state.get("chunk_size", config.CHUNK_SIZE)
+                    chunk_overlap = st.session_state.get("chunk_overlap", config.CHUNK_OVERLAP)
+                    
+                    st.caption(f"Đang chia nhỏ tài liệu: Chunk size {chunk_size}, Overlap {chunk_overlap}")
+                    chunks = split_documents(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+                    
+                    # Thêm vào vectorstore hiện có (hoặc tạo mới nếu chưa có)
+                    vectorstore = vs_manager.add_documents(chunks)
+                    vs_manager.save_vectorstore()
+                    
+                    # Cập nhật lại retriever cho RAG
+                    st.session_state.rag_manager.update_retriever(vectorstore)
+                    status.update(label=f"✅ Đã thêm {uploaded_file.name} vào kho tri thức!", state="complete", expanded=False)
             except Exception as e:
-                st.error(f"Lỗi tải tài liệu: {str(e)}")
-                docs = []
-
-            if docs:
-                # Lấy chunk settings từ session_state (được set bởi components.py)
-                chunk_size = st.session_state.get("chunk_size", config.CHUNK_SIZE)
-                chunk_overlap = st.session_state.get("chunk_overlap", config.CHUNK_OVERLAP)
-
-                st.caption(f"Chunk size: **{chunk_size}** | Overlap: **{chunk_overlap}**")
-
-                chunks = split_documents(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-                vectorstore = vs_manager.create_vectorstore(chunks)
-                vs_manager.save_vectorstore()
-                status.update(label=f"✅ Đã xử lý {len(chunks)} đoạn văn bản!", state="complete", expanded=False)
-
-
-    # Cập nhật retriever cho RAG chain
-    if vectorstore:
-        st.session_state.rag_manager.update_retriever(vectorstore)
+                st.error(f"Lỗi khi xử lý tài liệu: {str(e)}")
+    else:
+        st.info(f"ℹ️ Tài liệu `{uploaded_file.name}` đã có sẵn trong kho tri thức.")
 
 # --- Giao diện Chat ---
 if st.session_state.rag_manager and st.session_state.rag_manager.chain:
