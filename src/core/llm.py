@@ -1,6 +1,9 @@
 from langchain_ollama import OllamaLLM
 import config
 
+import streamlit as st
+
+@st.cache_resource
 def get_llm():
     """Returns the Ollama LLM instance."""
     return OllamaLLM(

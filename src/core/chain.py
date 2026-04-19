@@ -1,5 +1,6 @@
 # src/core/chain.py
 from pathlib import Path
+from src.utils.logger import logger
 
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
@@ -18,9 +19,12 @@ class RAGChainManager:
         self.chat_history = []
 
         # --- Template cho Basic RAG (mỗi câu hỏi độc lập) ---
-        self.basic_answer_template = """Sử dụng thông tin dưới đây để trả lời câu hỏi.
-            Nếu không tìm thấy câu trả lời trong ngữ cảnh, hãy nói thật thay vì bịa đặt.
-            Trả lời bằng tiếng Việt, rõ ràng và đầy đủ.
+        self.basic_answer_template = """Sử dụng thông tin từ các tài liệu được cung cấp dưới đây để trả lời câu hỏi.
+            Mỗi đoạn thông tin sẽ được đánh dấu NGUỒN (ví dụ [NGUỒN: file.pdf | Trang: 1]). 
+            - Hãy dùng các nhãn NGUỒN này để trích dẫn hoặc phân biệt thông tin nếu chúng đến từ các tài liệu khác nhau.
+            - Nếu có sự mâu thuẫn hay khác biệt giữa các tài liệu, hãy chỉ rõ tài liệu nào nói gì.
+            - Nếu không tìm thấy câu trả lời trong ngữ cảnh, hãy nói thật thay vì bịa đặt.
+            - Trả lời bằng tiếng Việt, rõ ràng và đầy đủ.
 
             Ngữ cảnh từ tài liệu:
             {context}
@@ -44,9 +48,12 @@ class RAGChainManager:
         self.condense_prompt = ChatPromptTemplate.from_template(self.condense_template)
 
         # --- Template trả lời cuối (Conversational RAG) ---
-        self.conv_answer_template = """Sử dụng thông tin dưới đây để trả lời câu hỏi.
-            Nếu không tìm thấy câu trả lời trong ngữ cảnh, hãy nói thật thay vì bịa đặt.
-            Trả lời bằng tiếng Việt, rõ ràng và đầy đủ.
+        self.conv_answer_template = """Sử dụng thông tin từ các tài liệu được cung cấp dưới đây để trả lời câu hỏi.
+            Mỗi đoạn thông tin sẽ được đánh dấu NGUỒN (ví dụ [NGUỒN: file.pdf | Trang: 1]). 
+            - Hãy dùng các nhãn NGUỒN này để trích dẫn hoặc phân biệt thông tin nếu chúng đến từ các tài liệu khác nhau.
+            - Nếu có sự mâu thuẫn hay khác biệt giữa các tài liệu, hãy chỉ rõ tài liệu nào nói gì.
+            - Nếu không tìm thấy câu trả lời trong ngữ cảnh, hãy nói thật thay vì bịa đặt.
+            - Trả lời bằng tiếng Việt, rõ ràng và đầy đủ.
 
             Ngữ cảnh từ tài liệu:
             {context}
@@ -57,7 +64,23 @@ class RAGChainManager:
         self.conv_answer_prompt = ChatPromptTemplate.from_template(self.conv_answer_template)
 
     def _format_docs(self, docs):
-        return "\n\n".join(doc.page_content for doc in docs)
+        formatted_docs = []
+        for doc in docs:
+            metadata = dict(doc.metadata or {})
+            file_name = metadata.get("file_name", metadata.get("filename", "Unknown Document"))
+            page_number = metadata.get("page_number", metadata.get("page"))
+            section = metadata.get("section")
+            
+            location = ""
+            if page_number is not None:
+                location = f" | Trang: {page_number}"
+            elif section:
+                location = f" | Mục: {section}"
+                
+            header = f"\n--- [NGUỒN: {file_name}{location}] ---"
+            formatted_docs.append(f"{header}\n{doc.page_content}")
+            
+        return "\n".join(formatted_docs)
 
     def _format_chat_history(self):
         """Chuyển đổi lịch sử sang chuỗi text cho prompt tóm tắt."""
@@ -202,30 +225,65 @@ class RAGChainManager:
         
         return full_answer, sources
 
+    def _prepare_query(self, question: str, conversational: bool) -> tuple[str, bool]:
+        """Phân tích ngữ cảnh và tối ưu câu hỏi. Trả về (optimized_query, is_changed)."""
+        logger.info(f"Chuẩn bị câu hỏi: '{question}' (Conversational: {conversational})")
+        if conversational and self.chat_history and self.condense_chain:
+            try:
+                optimized = self.condense_chain.invoke(question)
+                changed = optimized.strip().lower() != question.strip().lower()
+                logger.info(f"Câu hỏi tối ưu: '{optimized}'")
+                return optimized, changed
+            except Exception as e:
+                logger.error("Lỗi khi tối ưu câu hỏi bằng condense_chain", exc_info=True)
+        return question, False
+
+    def _retrieve_documents(self, query: str) -> tuple[list, list]:
+        """Thực hiện tìm kiếm tài liệu."""
+        logger.info(f"Bắt đầu retrieve tài liệu cho: '{query}'")
+        try:
+            docs = self.retriever.invoke(query)
+            sources = self._build_sources_from_docs(docs)
+            logger.info(f"Hoàn tất retrieve. Số lượng tài liệu: {len(docs)}")
+            return docs, sources
+        except Exception as e:
+            logger.error("Lỗi trong quá trình truy hồi tài liệu", exc_info=True)
+            return [], []
+
+    def _build_prompt_and_generate(self, query: str, docs: list, conversational: bool):
+        """Xây dựng context và khởi tạo chuỗi streaming."""
+        context = self._format_docs(docs)
+        prompt_template = self.conv_answer_prompt if (conversational and self.conv_chain) else self.basic_prompt
+        streaming_chain = prompt_template | self.llm | StrOutputParser()
+        logger.info("Bắt đầu sinh câu trả lời")
+        return streaming_chain.stream({"context": context, "question": query})
+
     def stream_ask(self, question: str, conversational: bool = True):
         """
         Generator xử lý câu hỏi và yield các gói thông tin (status, analysis, sources, chunk).
         Giúp UI hiển thị quá trình xử lý và streaming văn bản.
         """
+        import time
         if not self.chain:
             yield {"type": "error", "content": "Vui lòng tải tài liệu lên trước."}
             return
 
-        query_for_retrieval = question
+        overall_start = time.time()
         
         # 1. Phân tích ngữ cảnh hội thoại (nếu có lịch sử)
-        if conversational and self.chat_history:
-            yield {"type": "status", "content": "Đang phân tích ngữ cảnh hội thoại..."}
-            if self.condense_chain:
-                query_for_retrieval = self.condense_chain.invoke(question)
-                if query_for_retrieval.strip().lower() != question.strip().lower():
-                    yield {"type": "analysis", "content": f"🔍 **Câu hỏi tối ưu:** *{query_for_retrieval}*"}
+        yield {"type": "status", "content": "Đang phân tích ngữ cảnh hội thoại..."}
+        query_for_retrieval, is_changed = self._prepare_query(question, conversational)
+        
+        if is_changed:
+            yield {"type": "analysis", "content": f"🔍 **Câu hỏi tối ưu:** *{query_for_retrieval}*"}
 
         # 2. Truy xuất tài liệu
         yield {"type": "status", "content": "Đang tìm kiếm thông tin trong tài liệu..."}
-        docs = self.retriever.invoke(query_for_retrieval)
-        sources = self._build_sources_from_docs(docs)
+        retrieval_start = time.time()
+        docs, sources = self._retrieve_documents(query_for_retrieval)
+        retrieval_latency = time.time() - retrieval_start
         
+        yield {"type": "analysis", "content": f"⏱️ **Thời gian truy hồi:** {retrieval_latency:.2f}s ({len(docs)} documents)"}
         yield {"type": "sources", "content": sources}
 
         # 3. Tổng hợp câu trả lời
@@ -234,16 +292,17 @@ class RAGChainManager:
         else:
             yield {"type": "status", "content": "Đang tổng hợp câu trả lời từ tài liệu..."}
 
-        context = self._format_docs(docs)
-        prompt_template = self.conv_answer_prompt if (conversational and self.conv_chain) else self.basic_prompt
-        
-        # Khởi tạo streaming chain
-        streaming_chain = prompt_template | self.llm | StrOutputParser()
+        gen_start = time.time()
+        stream_generator = self._build_prompt_and_generate(query_for_retrieval, docs, conversational)
         
         full_answer = ""
-        for chunk in streaming_chain.stream({"context": context, "question": query_for_retrieval}):
+        for chunk in stream_generator:
             full_answer += chunk
             yield {"type": "chunk", "content": chunk}
+            
+        gen_latency = time.time() - gen_start
+        logger.info(f"Hoàn thành xử lý. Total time: {time.time() - overall_start:.2f}s. Generation: {gen_latency:.2f}s")
+        yield {"type": "analysis", "content": f"⏱️ **Thời gian sinh trả lời:** {gen_latency:.2f}s"}
 
         # 4. Cập nhật lịch sử
         if conversational:

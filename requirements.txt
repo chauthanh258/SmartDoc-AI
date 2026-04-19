@@ -13,3 +13,5 @@ langchain-huggingface
 docx2txt
 python-docx
 langchain-classic   
+flashrank
+rank-bm25

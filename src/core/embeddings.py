@@ -11,6 +11,9 @@ except Exception:
 
 import config
 
+import streamlit as st
+
+@st.cache_resource
 def get_embedding_model():
     """Returns the HuggingFace embedding model.
 

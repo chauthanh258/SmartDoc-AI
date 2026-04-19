@@ -8,6 +8,13 @@ from langchain_community.vectorstores import FAISS
 from langchain_classic.retrievers.ensemble import EnsembleRetriever
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
+from src.utils.logger import logger
+
+try:
+    from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
+    from langchain_community.document_compressors import FlashrankRerank
+except ImportError:
+    logger.warning("flashrank is not installed, reranker will not be available")
 
 
 def _to_date_or_none(value: Any) -> date | None:
@@ -299,19 +306,24 @@ class VectorStoreManager:
         - Ensemble: Kết hợp cả hai để tăng độ chính xác
         """
         if not self.vectorstore:
-            print("Lỗi: Vectorstore chưa được khởi tạo.")
+            logger.error("Lỗi: Vectorstore chưa được khởi tạo.")
             return None
 
-        # BM25 retriever does not natively support metadata constraints.
-        # If a filter is requested, return semantic retriever with filter.
+        # Filter chunks if metadata_filter is specified so BM25 applies it.
+        filtered_chunks = chunks
         if metadata_filter is not None:
-            return self.get_retriever(k=k, metadata_filter=metadata_filter)
+            filtered_chunks = [ch for ch in chunks if metadata_filter(dict(ch.metadata))]
+            if not filtered_chunks:
+                logger.warning("Không có chunks nào thỏa mãn filter. Trả về None cho BM25 retriever.")
+                return None
+            
+        logger.info(f"Khởi tạo BM25 retriever với {len(filtered_chunks)} chunks (đã filter: {metadata_filter is not None}).")
 
         # 1. Tạo FAISS retriever
-        faiss_retriever = self.vectorstore.as_retriever(search_kwargs={"k": k})
+        faiss_retriever = self.get_retriever(k=k, metadata_filter=metadata_filter)
 
         # 2. Tạo BM25 retriever từ các đoạn văn bản (chunks)
-        bm25_retriever = BM25Retriever.from_documents(chunks)
+        bm25_retriever = BM25Retriever.from_documents(filtered_chunks)
         bm25_retriever.k = k
 
         # 3. Kết hợp 2 bộ tìm kiếm với trọng số 50/50
@@ -320,3 +332,22 @@ class VectorStoreManager:
             weights=[0.5, 0.5]
         )
         return ensemble_retriever
+
+    def get_reranker_retriever(self, base_retriever, k=3):
+        """
+        Bọc base_retriever bằng FlashrankRerank.
+        Lấy nhiều hơn k kết quả từ base (ví dụ k*2), sau đó reranker xếp hạng và lấy top k.
+        """
+        try:
+            # Fetch more documents for the reranker to evaluate
+            # For FAISS, setting search_kwargs in base_retriever applies it. 
+            # We don't overwrite it here but let the pipeline naturally return candidates.
+            logger.info("Khởi tạo Reranker (FlashrankRerank).")
+            compressor = FlashrankRerank(top_n=k)
+            compression_retriever = ContextualCompressionRetriever(
+                base_compressor=compressor, base_retriever=base_retriever
+            )
+            return compression_retriever
+        except ImportError:
+            logger.error("Không thể import FlashrankRerank. Đảm bảo đã cài flashrank.")
+            return base_retriever

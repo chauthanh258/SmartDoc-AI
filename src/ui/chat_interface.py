@@ -99,6 +99,7 @@ def render_chat_interface(rag_manager):
             with st.status("Đang khởi tạo...", expanded=True) as status:
                 # Placeholder cho các thông tin phân tích
                 analysis_area = st.empty()
+                accumulated_analysis = []
                 
                 # Generator wrapper để st.write_stream có thể tiêu thụ chunks
                 def stream_generator():
@@ -107,12 +108,13 @@ def render_chat_interface(rag_manager):
                         if packet["type"] == "status":
                             status.update(label=packet["content"])
                         elif packet["type"] == "analysis":
-                            analysis_area.markdown(packet["content"])
+                            accumulated_analysis.append(packet["content"])
+                            analysis_area.markdown("\n".join(accumulated_analysis))
                         elif packet["type"] == "sources":
                             sources = packet["content"]
                         elif packet["type"] == "chunk":
                             # Khi nhận được chunk đầu tiên, đóng status lại để tập trung vào câu trả lời
-                            status.update(label="✅ Đã xử lý xong", state="complete", expanded=False)
+                            status.update(label="✅ Đã xử lý xong", state="complete", expanded=True)
                             full_answer += packet["content"]
                             yield packet["content"]
                         elif packet["type"] == "error":

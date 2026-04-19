@@ -30,7 +30,7 @@ def _format_timestamp(iso_timestamp: str) -> str:
     return iso_timestamp.replace("T", " ")[:19]
 
 
-def render_sidebar(vs_manager=None):
+def render_sidebar(vs_manager):
     """
     Render toàn bộ sidebar.
     Phase 1: Instructions, Status, File uploader, History, Manager.
@@ -73,6 +73,33 @@ def render_sidebar(vs_manager=None):
             for f in uploaded_files:
                 size_mb = f.size / (1024 * 1024)
                 st.caption(f"  📄 {f.name} ({size_mb:.1f} MB)")
+
+        st.divider()
+
+        # ── Kho tri thức ──────────────────────────────────────────────────
+        st.subheader("📚 Kho tri thức")
+        if vs_manager and vs_manager.vectorstore is not None:
+            registry = vs_manager.get_document_registry()
+            if not registry:
+                st.caption("Chưa có tài liệu nào trong bộ nhớ.")
+            else:
+                # with st.container(height=150):
+                #     for doc in registry:
+                #         fname = doc.get("file_name") or doc.get("filename", "Unknown")
+                #         chunks = doc.get("chunk_count", 0)
+                #         st.markdown(f"- 📄 `{fname}` _({chunks} đoạn)_")
+                for doc in registry:
+                    # Tạo label gọn gàng
+                    fname = doc['filename']
+                    if len(fname) > 25:
+                        fname = fname[:22] + "..."
+                    
+                    with st.expander(f"📄 {fname}", expanded=False):
+                        st.write(f"**Số đoạn:** `{doc['chunk_count']}`")
+                        st.write(f"**Ngôn ngữ:** `{doc.get('language', 'Không rõ')}`")
+                        st.write(f"**Ngày tải:** `{doc.get('upload_date_only', 'N/A')}`")
+        else:
+            st.caption("Chưa có tài liệu nào trong bộ nhớ.")
 
         st.divider()
 
