@@ -1,6 +1,14 @@
 # app.py
-import streamlit as st
 import os
+import warnings
+# ── TẮT WARNING __path__ từ transformers (rất phổ biến) ─────────────────────
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+warnings.filterwarnings(
+    "ignore",
+    message=r"Accessing `__path__` from .*",
+    category=FutureWarning,
+)
+import streamlit as st
 import config
 from src.core.document_loader import load_multiple_documents
 from src.core.text_splitter import split_documents, ALLOWED_CHUNK_SIZES, ALLOWED_CHUNK_OVERLAPS
@@ -43,43 +51,68 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "rag_manager" not in st.session_state:
     st.session_state.rag_manager = None
-if "indexed_files" not in st.session_state:
-    # Theo dõi những file đã được index để tránh tạo lại index khi rerun
-    st.session_state.indexed_files = set()
 
 # ── Khởi tạo các thành phần Core ────────────────────────────────────────────
 embedding_model = get_embedding_model()
 llm = get_llm()
 vs_manager = VectorStoreManager(embedding_model)
 
+if "indexed_files" not in st.session_state:
+    st.session_state.indexed_files = set()
+#     # Tự động đồng bộ khóa tri thức cũ tránh xử lý lại
+#     if vs_manager.vectorstore is None:
+#         vs_manager.load_vectorstore()
+#     if vs_manager.vectorstore is not None:
+#         for doc in vs_manager.get_document_registry():
+#             fname = doc.get("file_name") or doc.get("filename")
+#             if fname:
+#                 st.session_state.indexed_files.add(fname)
+
 if st.session_state.rag_manager is None:
     st.session_state.rag_manager = RAGChainManager(llm)
 
+vectorstore = vs_manager.load_vectorstore()
+if vectorstore:
+    st.session_state.rag_manager.update_retriever(vectorstore)
+
 # ── Render Sidebar (truyền vs_manager để render document registry) ───────────
-uploaded_files, selected_docs = render_sidebar(vs_manager=vs_manager)
+uploaded_files, selected_docs = render_sidebar(vs_manager)
 
 # ── Xử lý các file được upload (Phase 3: hỗ trợ nhiều file) ─────────────────
 if uploaded_files:
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
 
-    # Chỉ xử lý các file chưa được index trong phiên này
-    new_files = [f for f in uploaded_files if f.name not in st.session_state.indexed_files]
+    # Kiểm tra xem file này đã được index chưa
+    existing_docs = vs_manager.get_document_registry()
+    existing_docs = existing_docs or []
+    uploaded_names = [f.name for f in uploaded_files]
 
-    if new_files:
+    # Build set of already indexed filenames from registry
+    indexed_names = set()
+    for d in existing_docs:
+        if d.get("filename"):
+            indexed_names.add(d.get("filename"))
+        if d.get("file_name"):
+            indexed_names.add(d.get("file_name"))
+
+    # Keep only files that are not yet indexed
+    new_uploaded_files = [f for f in uploaded_files if f.name not in indexed_names]
+
+    if new_uploaded_files:
         # Lưu tất cả file mới xuống disk
         saved_paths = []
-        for uploaded_file in new_files:
+        for uploaded_file in uploaded_files:
             file_path = os.path.join(config.UPLOAD_DIR, uploaded_file.name)
             with open(file_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             saved_paths.append(file_path)
 
-        with st.status(f"Đang xử lý {len(new_files)} tài liệu...", expanded=True) as status:
+        with st.status(f"Đang xử lý {len(uploaded_files)} tài liệu...", expanded=True) as status:
             # Thử tải vectorstore sẵn có từ disk
             vectorstore = vs_manager.load_vectorstore()
 
             # Đọc tất cả file mới cùng lúc bằng load_multiple_documents
-            st.write(f"📖 Đọc {len(new_files)} tài liệu...")
+            st.write(f"📖 Đọc {len(uploaded_files)} tài liệu...")
             docs = load_multiple_documents(saved_paths, skip_failed=True)
             st.write(f"✅ Đọc xong: {len(docs)} trang/section")
 
@@ -106,15 +139,32 @@ if uploaded_files:
                 vectorstore = vs_manager.add_documents(chunks)
             vs_manager.save_vectorstore()
 
+            # Ensure manager has the in-memory reference and update the RAG retriever
+            vs_manager.vectorstore = vectorstore
+            if st.session_state.get("rag_manager"):
+                try:
+                    st.session_state.rag_manager.update_retriever(vectorstore)
+                except Exception:
+                    # Fallback to direct retriever update if necessary
+                    try:
+                        retr = vs_manager.get_retriever()
+                        st.session_state.rag_manager.update_retriever_direct(retr)
+                    except Exception:
+                        pass
+
             # Đánh dấu các file đã index
-            for f in new_files:
+            for f in uploaded_files:
                 st.session_state.indexed_files.add(f.name)
 
             status.update(
-                label=f"✅ Đã xử lý {len(new_files)} tài liệu, {len(chunks)} đoạn!",
+                label=f"✅ Đã xử lý {len(uploaded_files)} tài liệu, {len(chunks)} đoạn!",
                 state="complete",
                 expanded=False,
             )
+        st.rerun()
+    else:
+        for f in uploaded_files:
+            st.info(f"Tài liệu `{f.name}` đã có sẵn trong kho tri thức.")
 
     # Đảm bảo vs_manager luôn có vectorstore (kể cả khi không có file mới)
     if vs_manager.vectorstore is None:
@@ -136,22 +186,25 @@ if vs_manager.vectorstore is not None:
             return _filter
         metadata_filter = _make_multi_filter(set(selected_docs))
 
-    # Chọn retriever: hybrid search hoặc standard, áp dụng filter
+    # Hỗ trợ metadata filter + hybrid search
+    use_hybrid = st.session_state.get("hybrid_search", False)
+    use_reranker = st.session_state.get("reranking", False)
+
+    # Nếu dùng hybrid, ta truyền cả chunks và filter. 
     if use_hybrid:
-        # Lấy chunks để BM25 (cần text đã được chunk)
-        # Trường hợp hybrid với filter: fallback về semantic + filter
-        if metadata_filter:
-            retriever = vs_manager.get_retriever(k=k, metadata_filter=metadata_filter)
-        else:
-            # Để hybrid search, cần có chunks - lấy từ docstore
-            docstore_dict = getattr(vs_manager.vectorstore.docstore, "_dict", {})
-            from langchain_core.documents import Document as LCDoc
-            all_chunks = [
-                doc for doc in docstore_dict.values() if isinstance(doc, LCDoc)
-            ]
-            retriever = vs_manager.get_hybrid_retriever(all_chunks, k=k)
+        docstore_dict = getattr(vs_manager.vectorstore.docstore, "_dict", {})
+        from langchain_core.documents import Document as LCDoc
+        all_chunks = [
+            doc for doc in docstore_dict.values() if isinstance(doc, LCDoc)
+        ]
+        # Gọi BM25 retriever được tối ưu (đang được fix bên trong get_hybrid_retriever)
+        retriever = vs_manager.get_hybrid_retriever(all_chunks, k=k*2 if use_reranker else k, metadata_filter=metadata_filter)
     else:
-        retriever = vs_manager.get_retriever(k=k, metadata_filter=metadata_filter)
+        retriever = vs_manager.get_retriever(k=k*2 if use_reranker else k, metadata_filter=metadata_filter)
+
+    # Apply reranker if enabled
+    if use_reranker and retriever:
+        retriever = vs_manager.get_reranker_retriever(retriever, k=k)
 
     if retriever:
         st.session_state.rag_manager.update_retriever_direct(retriever)

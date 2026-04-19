@@ -63,6 +63,20 @@ def _enrich_chunk_metadata(chunk: Document, chunk_index: int) -> Document:
 
     metadata["chunk_index"] = chunk_index
     chunk.metadata = metadata
+
+    # Contextual Chunking: Attach document identity directly to the text
+    # so that the vector embedding includes the doc context.
+    file_name = metadata.get("file_name", "Unknown Document")
+    location = ""
+    if page_number is not None:
+        location = f" - Trang {page_number}"
+    elif metadata.get("section"):
+        location = f" - Mục {metadata.get('section')}"
+    
+    context_header = f"[{file_name}{location}]"
+    if not chunk.page_content.startswith(context_header):
+        chunk.page_content = f"{context_header}\n{chunk.page_content}"
+
     return chunk
 
 
