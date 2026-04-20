@@ -7,6 +7,7 @@ SmartDoc AI is a powerful Retrieval-Augmented Generation (RAG) system built with
 - **Efficient Chunking**: Advanced text splitting strategies.
 - **Local Embedding & Vector Search**: Fast and secure local retrieval using FAISS.
 - **Ollama Integration**: Powered by state-of-the-art local LLMs (default: `qwen2.5:7b`).
+- **Live Ollama Runtime Switch**: Switch Local/Cloud endpoint, model, and API key from sidebar without restarting app.
 - **Conversational UI**: User-friendly chat interface with Streamlit.
 
 ## Installation Steps
@@ -70,6 +71,32 @@ Start the Streamlit app:
 ```bash
 streamlit run app.py
 ```
+
+## Ollama Live Settings (Local/Cloud)
+
+Open `⚙️ Cài đặt nâng cao` in the sidebar and use the **LLM Ollama (Live)** section:
+
+1. Select mode: `local` or `cloud`.
+2. Fill endpoint + model.
+3. (Cloud mode) Enter API key.
+4. Click `Áp dụng model/endpoint Ollama`.
+
+The app will switch model live on the next rerun automatically, without restarting Streamlit.
+
+### Environment Variables
+
+You can preconfigure defaults in `.env`:
+
+```env
+OLLAMA_MODE=local
+OLLAMA_LOCAL_BASE_URL=http://localhost:11434
+OLLAMA_LOCAL_MODEL=qwen3:0.6b
+OLLAMA_CLOUD_BASE_URL=https://your-ollama-host
+OLLAMA_CLOUD_MODEL=qwen3:8b
+OLLAMA_API_KEY=
+```
+
+When you click Apply in Advanced Settings, these values are persisted back into `.env`.
 
 ## Directory Structure
 ```bash
@@ -195,4 +222,4 @@ pytest tests/test_phase2.py -v
 4. Ask "Ai là người sáng lập ra SmartDoc AI?".
 5. Ask a follow-up: "Họ làm điều đó khi nào?" (Verify it understands "Họ" refers to the founders).
 6. Click "Xem nguồn trích dẫn" and verify the citation format (e.g., `[Muc ... - file.docx]`).
-
+

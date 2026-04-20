@@ -41,24 +41,26 @@ def test_citation_formatting():
 
 # --- Test Case 3: Conversational Memory (Simplified Mock) ---
 def test_conversational_memory():
-    # Mock LLM and Chains to avoid Pydantic validation issues with real LangChain objects in mock state
+    # Mock internals to isolate chat history logic from LangChain runtime types.
     mock_llm = MagicMock()
     manager = RAGChainManager(mock_llm)
     manager.retriever = MagicMock()
-    
-    # Mock the internal chains directly to isolate history logic
-    manager.conv_chain = MagicMock()
-    manager.conv_chain.invoke.side_effect = ["AI Answer 1", "AI Answer 2"]
-    
-    manager.basic_chain = MagicMock()
-    manager.basic_chain.invoke.return_value = "Basic Answer"
-    
-    # Mock _extract_sources to avoid retriever issues
-    manager._extract_sources = MagicMock(return_value=[{"citation": "source1"}])
+    manager.basic_chain = object()  # Ensure manager.chain is truthy.
+
+    manager._prepare_query = MagicMock(side_effect=[
+        ("Who is Einstein?", False),
+        ("What did he do?", False),
+    ])
+    manager._retrieve_documents = MagicMock(return_value=([], [{"citation": "source1"}]))
+    manager._build_prompt_and_generate = MagicMock(side_effect=[
+        iter(["AI Answer 1"]),
+        iter(["AI Answer 2"]),
+    ])
     
     # First question
     ans1, sources = manager.ask("Who is Einstein?", conversational=True)
     assert ans1 == "AI Answer 1"
+    assert sources == [{"citation": "source1"}]
     assert len(manager.chat_history) == 2
     
     # Second question

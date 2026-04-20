@@ -53,7 +53,16 @@ def render_sidebar(vs_manager):
 
         # ── Trạng thái hệ thống ────────────────────────────────────────────
         st.subheader("🖥️ Trạng thái")
-        st.info(f"LLM: `{config.LLM_MODEL}`")
+        mode = st.session_state.get("ollama_mode_effective", config.OLLAMA_MODE)
+        if mode == "cloud":
+            active_model = st.session_state.get("ollama_cloud_model_effective", config.OLLAMA_CLOUD_MODEL)
+            active_base_url = st.session_state.get("ollama_cloud_base_url_effective", config.OLLAMA_CLOUD_BASE_URL)
+        else:
+            active_model = st.session_state.get("ollama_local_model_effective", config.OLLAMA_LOCAL_MODEL)
+            active_base_url = st.session_state.get("ollama_local_base_url_effective", config.OLLAMA_LOCAL_BASE_URL)
+
+        st.info(f"LLM ({mode.upper()}): `{active_model}`")
+        st.caption(f"Endpoint: `{active_base_url}`")
         st.info(f"Embeddings: `{config.EMBEDDING_MODEL.split('/')[-1]}`")
 
         st.divider()

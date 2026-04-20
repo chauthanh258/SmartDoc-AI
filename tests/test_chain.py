@@ -60,3 +60,23 @@ def test_prepare_query_condensable(rag_manager):
     query, changed = rag_manager._prepare_query("it", conversational=True)
     assert changed is True
     assert query == "What is X?"
+
+
+def test_update_llm_rebuilds_chains(rag_manager):
+    calls = {"basic": 0, "conv": 0}
+
+    def _fake_build_basic():
+        calls["basic"] += 1
+
+    def _fake_build_conv():
+        calls["conv"] += 1
+
+    rag_manager._build_basic_chain = _fake_build_basic
+    rag_manager._build_conv_chain = _fake_build_conv
+
+    new_llm = MagicMock()
+    rag_manager.update_llm(new_llm)
+
+    assert rag_manager.llm is new_llm
+    assert calls["basic"] == 1
+    assert calls["conv"] == 1
