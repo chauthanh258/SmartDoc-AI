@@ -14,7 +14,14 @@ LOGS_DIR = os.path.join(BASE_DIR, "logs")
 
 # Model Configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:1.5b")
+OLLAMA_PROXY_BASE_URL = os.getenv("OLLAMA_PROXY_BASE_URL", OLLAMA_BASE_URL)
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:0.6b")
+OLLAMA_MODE = os.getenv("OLLAMA_MODE", "local")
+OLLAMA_LOCAL_BASE_URL = os.getenv("OLLAMA_LOCAL_BASE_URL", OLLAMA_PROXY_BASE_URL)
+OLLAMA_LOCAL_MODEL = os.getenv("OLLAMA_LOCAL_MODEL", LLM_MODEL)
+OLLAMA_CLOUD_BASE_URL = os.getenv("OLLAMA_CLOUD_BASE_URL", OLLAMA_PROXY_BASE_URL)
+OLLAMA_CLOUD_MODEL = os.getenv("OLLAMA_CLOUD_MODEL", LLM_MODEL)
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 # RAG Configuration

@@ -1,7 +1,28 @@
 # src/ui/components.py
+import os
+import json
+import urllib.request
 import streamlit as st
 import config
 from src.core.text_splitter import ALLOWED_CHUNK_SIZES, ALLOWED_CHUNK_OVERLAPS
+from src.utils.helpers import persist_ollama_runtime_settings
+
+
+@st.cache_data(ttl=20)
+def _fetch_ollama_models(base_url: str, api_key: str = "") -> list[str]:
+    """Fetch available Ollama models from /api/tags."""
+    endpoint = f"{base_url.rstrip('/')}/api/tags"
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    request = urllib.request.Request(endpoint, headers=headers, method="GET")
+    with urllib.request.urlopen(request, timeout=4) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    models = payload.get("models", [])
+    names = [m.get("name", "").strip() for m in models if isinstance(m, dict)]
+    return sorted({name for name in names if name})
 
 
 def render_settings_panel():
@@ -18,6 +39,16 @@ def render_settings_panel():
         "conversational_mode": True,
         "hybrid_search": False,
         "reranking": False,
+        "ollama_mode_effective": config.OLLAMA_MODE if config.OLLAMA_MODE in {"local", "cloud"} else "local",
+        "ollama_local_base_url_effective": config.OLLAMA_PROXY_BASE_URL,
+        "ollama_local_model_effective": config.OLLAMA_LOCAL_MODEL,
+        "ollama_cloud_base_url_effective": config.OLLAMA_PROXY_BASE_URL,
+        "ollama_cloud_model_effective": config.OLLAMA_CLOUD_MODEL,
+        "ollama_api_key_effective": config.OLLAMA_API_KEY,
+        "input_ollama_mode": config.OLLAMA_MODE if config.OLLAMA_MODE in {"local", "cloud"} else "local",
+        "input_ollama_local_model": config.OLLAMA_LOCAL_MODEL,
+        "input_ollama_cloud_model": config.OLLAMA_CLOUD_MODEL,
+        "input_ollama_api_key": config.OLLAMA_API_KEY,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -111,12 +142,165 @@ def render_settings_panel():
         if reranking:
             st.success("✅ Re-ranking đang bật")
 
+        st.divider()
+
+        # ── Ollama runtime (Local/Cloud) ─────────────────────────────────
+        st.markdown("**LLM Ollama (Live)**")
+        shared_base_url = config.OLLAMA_PROXY_BASE_URL
+
+        # Force both modes to use local Ollama proxy endpoint.
+        st.session_state.ollama_local_base_url_effective = shared_base_url
+        st.session_state.ollama_cloud_base_url_effective = shared_base_url
+
+        active_mode = st.session_state.ollama_mode_effective
+        active_base_url = shared_base_url
+        active_model = (
+            st.session_state.ollama_cloud_model_effective
+            if active_mode == "cloud"
+            else st.session_state.ollama_local_model_effective
+        )
+
+        st.caption(
+            f"Đang dùng: **{active_mode.upper()}** | model `{active_model}` | endpoint `{active_base_url}`"
+        )
+
+        selected_mode = st.selectbox(
+            "Chế độ Ollama",
+            options=["local", "cloud"],
+            index=0 if st.session_state.input_ollama_mode == "local" else 1,
+            key="select_ollama_mode",
+            help="Local: Ollama chạy trong LAN/máy cá nhân. Cloud: endpoint Ollama hosted.",
+        )
+        st.session_state.input_ollama_mode = selected_mode
+
+        st.caption(f"Endpoint proxy dùng chung: `{shared_base_url}`")
+
+        if st.button("Làm mới danh sách model", key="refresh_ollama_models"):
+            _fetch_ollama_models.clear()
+            st.rerun()
+
+        current_api_key = st.session_state.input_ollama_api_key.strip()
+        cloud_api_key = current_api_key
+
+        if selected_mode == "cloud":
+            st.text_input(
+                "Cloud API key",
+                key="input_ollama_api_key",
+                type="password",
+                help="API key dùng cho cloud model qua Ollama local proxy.",
+            )
+            cloud_api_key = st.session_state.input_ollama_api_key.strip()
+
+        try:
+            model_options = _fetch_ollama_models(shared_base_url, cloud_api_key if selected_mode == "cloud" else "")
+        except Exception:
+            model_options = []
+
+        # Local mode hides cloud-tagged models; cloud mode only shows cloud-tagged models.
+        if selected_mode == "cloud":
+            mode_filtered_options = [m for m in model_options if "cloud" in m.lower()]
+        else:
+            mode_filtered_options = [m for m in model_options if "cloud" not in m.lower()]
+
+        fallback_models = [
+            st.session_state.input_ollama_local_model,
+            st.session_state.input_ollama_cloud_model,
+            st.session_state.ollama_local_model_effective,
+            st.session_state.ollama_cloud_model_effective,
+        ]
+        for model_name in fallback_models:
+            if not model_name:
+                continue
+
+            lowered = model_name.lower()
+            if selected_mode == "cloud" and "cloud" not in lowered:
+                continue
+            if selected_mode == "local" and "cloud" in lowered:
+                continue
+            if model_name not in mode_filtered_options:
+                mode_filtered_options.append(model_name)
+
+        model_options = sorted({m.strip() for m in mode_filtered_options if m and m.strip()})
+        if not model_options:
+            model_options = [config.LLM_MODEL]
+
+        if selected_mode == "local":
+            current_local = st.session_state.input_ollama_local_model
+            if current_local not in model_options:
+                current_local = model_options[0]
+            local_model = st.selectbox(
+                "Local model",
+                options=model_options,
+                index=model_options.index(current_local),
+                key="select_ollama_local_model",
+            )
+            st.session_state.input_ollama_local_model = local_model
+        else:
+            current_cloud = st.session_state.input_ollama_cloud_model
+            if current_cloud not in model_options:
+                current_cloud = model_options[0]
+            cloud_model = st.selectbox(
+                "Cloud model",
+                options=model_options,
+                index=model_options.index(current_cloud),
+                key="select_ollama_cloud_model",
+            )
+            st.session_state.input_ollama_cloud_model = cloud_model
+
+        if not model_options:
+            st.warning("Không lấy được danh sách model từ Ollama.")
+
+        if st.button("Áp dụng model/endpoint Ollama", key="apply_ollama_runtime"):
+            selected_mode = st.session_state.input_ollama_mode
+            local_base = shared_base_url
+            local_model = st.session_state.input_ollama_local_model.strip()
+            cloud_base = shared_base_url
+            cloud_model = st.session_state.input_ollama_cloud_model.strip()
+            api_key = st.session_state.input_ollama_api_key.strip()
+
+            if selected_mode == "local" and not local_model:
+                st.error("Vui lòng chọn Local model.")
+            elif selected_mode == "cloud" and not cloud_model:
+                st.error("Vui lòng chọn Cloud model.")
+            else:
+                st.session_state.ollama_mode_effective = selected_mode
+                st.session_state.ollama_local_base_url_effective = local_base
+                st.session_state.ollama_local_model_effective = local_model
+                st.session_state.ollama_cloud_base_url_effective = cloud_base
+                st.session_state.ollama_cloud_model_effective = cloud_model
+                st.session_state.ollama_api_key_effective = api_key
+
+                env_path = os.path.join(config.BASE_DIR, ".env")
+                persist_ollama_runtime_settings(
+                    env_path=env_path,
+                    mode=selected_mode,
+                    local_base_url=local_base,
+                    local_model=local_model,
+                    cloud_base_url=cloud_base,
+                    cloud_model=cloud_model,
+                    api_key=api_key,
+                )
+
+                st.success("Đã áp dụng cấu hình Ollama mới. Hệ thống đang chuyển model live.")
+                st.rerun()
+
     return {
         "chunk_size": st.session_state.chunk_size,
         "chunk_overlap": st.session_state.chunk_overlap,
         "conversational_mode": st.session_state.conversational_mode,
         "hybrid_search": st.session_state.hybrid_search,
         "reranking": st.session_state.reranking,
+        "ollama_mode": st.session_state.ollama_mode_effective,
+        "ollama_base_url": (
+            st.session_state.ollama_cloud_base_url_effective
+            if st.session_state.ollama_mode_effective == "cloud"
+            else st.session_state.ollama_local_base_url_effective
+        ),
+        "ollama_model": (
+            st.session_state.ollama_cloud_model_effective
+            if st.session_state.ollama_mode_effective == "cloud"
+            else st.session_state.ollama_local_model_effective
+        ),
     }
 
 

@@ -1,15 +1,22 @@
 import pytest
-from unittest.mock import MagicMock
+from langchain_core.embeddings import Embeddings
 from langchain_core.documents import Document
 from src.core.vectorstore import VectorStoreManager, build_metadata_filter
 
+
+class DummyEmbeddings(Embeddings):
+    def __init__(self, dim: int = 8):
+        self.dim = dim
+
+    def embed_documents(self, texts):
+        return [[0.1] * self.dim for _ in texts]
+
+    def embed_query(self, text):
+        return [0.1] * self.dim
+
 @pytest.fixture
 def mock_embedding_model():
-    mock = MagicMock()
-    # Return fake embeddings
-    mock.embed_documents.return_value = [[0.1]*768 for _ in range(3)]
-    mock.embed_query.return_value = [0.1]*768
-    return mock
+    return DummyEmbeddings(dim=16)
 
 @pytest.fixture
 def vector_manager(mock_embedding_model):

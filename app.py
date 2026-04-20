@@ -1,5 +1,6 @@
 # app.py
 import os
+import hashlib
 import warnings
 # ── TẮT WARNING __path__ từ transformers (rất phổ biến) ─────────────────────
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
@@ -46,15 +47,78 @@ st.markdown("""
 
 st.title("📄 SmartDoc AI - Hỗ trợ tài liệu thông minh")
 
+
+def _init_runtime_llm_state():
+    """Initialize runtime Ollama state once per Streamlit session."""
+    shared_base_url = config.OLLAMA_PROXY_BASE_URL
+    defaults = {
+        "ollama_mode_effective": config.OLLAMA_MODE if config.OLLAMA_MODE in {"local", "cloud"} else "local",
+        "ollama_local_base_url_effective": shared_base_url,
+        "ollama_local_model_effective": config.OLLAMA_LOCAL_MODEL,
+        "ollama_cloud_base_url_effective": shared_base_url,
+        "ollama_cloud_model_effective": config.OLLAMA_CLOUD_MODEL,
+        "ollama_api_key_effective": config.OLLAMA_API_KEY,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def _resolve_runtime_llm_config() -> dict:
+    """Return active runtime config for Ollama local/cloud mode."""
+    shared_base_url = config.OLLAMA_PROXY_BASE_URL
+    mode = st.session_state.get("ollama_mode_effective", "local")
+    if mode == "cloud":
+        base_url = shared_base_url
+        model = st.session_state.get("ollama_cloud_model_effective", config.OLLAMA_CLOUD_MODEL)
+        api_key = st.session_state.get("ollama_api_key_effective", config.OLLAMA_API_KEY)
+    else:
+        base_url = shared_base_url
+        model = st.session_state.get("ollama_local_model_effective", config.OLLAMA_LOCAL_MODEL)
+        api_key = ""
+
+    return {
+        "mode": mode,
+        "base_url": (base_url or "").strip(),
+        "model": (model or "").strip(),
+        "api_key": (api_key or "").strip(),
+        "temperature": config.TEMPERATURE,
+    }
+
+
+def _llm_signature(runtime_cfg: dict) -> str:
+    """Generate a stable signature to detect runtime LLM config changes."""
+    api_key_hash = ""
+    if runtime_cfg["api_key"]:
+        api_key_hash = hashlib.sha256(runtime_cfg["api_key"].encode("utf-8")).hexdigest()[:12]
+    return "|".join(
+        [
+            runtime_cfg["mode"],
+            runtime_cfg["base_url"],
+            runtime_cfg["model"],
+            str(runtime_cfg["temperature"]),
+            api_key_hash,
+        ]
+    )
+
 # ── Khởi tạo Session State ──────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "rag_manager" not in st.session_state:
     st.session_state.rag_manager = None
 
+_init_runtime_llm_state()
+runtime_llm_cfg = _resolve_runtime_llm_config()
+current_llm_signature = _llm_signature(runtime_llm_cfg)
+
 # ── Khởi tạo các thành phần Core ────────────────────────────────────────────
 embedding_model = get_embedding_model()
-llm = get_llm()
+llm = get_llm(
+    base_url=runtime_llm_cfg["base_url"],
+    model=runtime_llm_cfg["model"],
+    temperature=runtime_llm_cfg["temperature"],
+    api_key=runtime_llm_cfg["api_key"],
+)
 vs_manager = VectorStoreManager(embedding_model)
 
 if "indexed_files" not in st.session_state:
@@ -70,6 +134,13 @@ if "indexed_files" not in st.session_state:
 
 if st.session_state.rag_manager is None:
     st.session_state.rag_manager = RAGChainManager(llm)
+    st.session_state.active_llm_signature = current_llm_signature
+else:
+    previous_signature = st.session_state.get("active_llm_signature", "")
+    if previous_signature != current_llm_signature:
+        st.session_state.rag_manager.update_llm(llm)
+        st.session_state.active_llm_signature = current_llm_signature
+        st.toast("Đã cập nhật model Ollama live", icon="✅")
 
 vectorstore = vs_manager.load_vectorstore()
 if vectorstore:

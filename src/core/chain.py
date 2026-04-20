@@ -157,6 +157,13 @@ class RAGChainManager:
         self._build_basic_chain() 
         self._build_conv_chain()
 
+    def update_llm(self, llm):
+        """Cập nhật LLM runtime và build lại chains hiện có."""
+        self.llm = llm
+        if self.retriever:
+            self._build_basic_chain()
+            self._build_conv_chain()
+
     def _build_basic_chain(self):
         """Xây dựng Basic RAG chain - không có memory."""
         if not self.retriever:
