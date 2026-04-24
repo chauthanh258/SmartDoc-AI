@@ -243,7 +243,7 @@ if uploaded_files:
 
 # ── Cập nhật Retriever theo filter và settings ───────────────────────────────
 if vs_manager.vectorstore is not None:
-    k = 3
+    k = 7
     use_hybrid = st.session_state.get("hybrid_search", False)
 
     # Xây dựng metadata filter nếu người dùng đã chọn tài liệu cụ thể (Phase 3)

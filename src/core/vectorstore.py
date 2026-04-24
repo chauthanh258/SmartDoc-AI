@@ -326,10 +326,10 @@ class VectorStoreManager:
         bm25_retriever = BM25Retriever.from_documents(filtered_chunks)
         bm25_retriever.k = k
 
-        # 3. Kết hợp 2 bộ tìm kiếm với trọng số 50/50
+        # 3. Kết hợp 2 bộ tìm kiếm với trọng số ưu tiên Semantic hơn (30% Keyword, 70% Semantic)
         ensemble_retriever = EnsembleRetriever(
             retrievers=[bm25_retriever, faiss_retriever],
-            weights=[0.5, 0.5]
+            weights=[0.3, 0.7]
         )
         return ensemble_retriever
 
@@ -340,10 +340,8 @@ class VectorStoreManager:
         """
         try:
             # Fetch more documents for the reranker to evaluate
-            # For FAISS, setting search_kwargs in base_retriever applies it. 
-            # We don't overwrite it here but let the pipeline naturally return candidates.
-            logger.info("Khởi tạo Reranker (FlashrankRerank).")
-            compressor = FlashrankRerank(top_n=k)
+            logger.info("Khởi tạo Reranker (FlashrankRerank) với model: ms-marco-MiniLM-L-12-v2")
+            compressor = FlashrankRerank(model="ms-marco-MiniLM-L-12-v2", top_n=k)
             compression_retriever = ContextualCompressionRetriever(
                 base_compressor=compressor, base_retriever=base_retriever
             )

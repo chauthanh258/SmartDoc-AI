@@ -63,6 +63,25 @@ class RAGChainManager:
             Câu trả lời:"""
         self.conv_answer_prompt = ChatPromptTemplate.from_template(self.conv_answer_template)
 
+        # --- Template cho CRAG Evaluator ---
+        self.crag_evaluator_template = """Bạn là một chuyên gia đánh giá độ liên quan giữa tài liệu và câu hỏi.
+            Nhiệm vụ của bạn là đánh giá xem đoạn tài liệu dưới đây có chứa thông tin để trả lời câu hỏi hay không.
+            
+            Các mức độ đánh giá:
+            - RELEVANT: Tài liệu chứa thông tin trực tiếp hoặc gián tiếp để trả lời câu hỏi.
+            - PARTIAL: Tài liệu có liên quan một phần nhưng chưa đủ để trả lời hoàn toàn.
+            - IRRELEVANT: Tài liệu hoàn toàn không liên quan đến câu hỏi.
+
+            Chỉ trả lời DUY NHẤT một từ: RELEVANT, PARTIAL hoặc IRRELEVANT.
+
+            Tài liệu:
+            {context}
+
+            Câu hỏi: {question}
+
+            Đánh giá của bạn:"""
+        self.crag_evaluator_prompt = ChatPromptTemplate.from_template(self.crag_evaluator_template)
+
     def _format_docs(self, docs):
         formatted_docs = []
         for doc in docs:
@@ -92,12 +111,12 @@ class RAGChainManager:
                 buffer += f"AI: {message.content}\n"
         return buffer
 
-    def _build_sources_from_docs(self, docs: list) -> list[dict]:
+    def _build_sources_from_docs(self, docs: list, crag_decisions: list = None) -> list[dict]:
         """Build stable, deduplicated source records from retrieved documents."""
         sources: list[dict] = []
         seen_citations: set[str] = set()
 
-        for doc in docs:
+        for i, doc in enumerate(docs):
             meta = dict(doc.metadata or {})
             citation_data = extract_citation_data(doc)
 
@@ -130,18 +149,28 @@ class RAGChainManager:
             if page_value is None:
                 page_value = meta.get("page_number", meta.get("page", "?"))
 
-            sources.append(
-                {
-                    "content": doc.page_content,
-                    "snippet": doc.page_content,
-                    "file": file_name,
-                    "file_name": file_name,
-                    "page": page_value,
-                    "chunk_index": citation_data.get("chunk_index"),
-                    "citation": citation_label,
-                    "metadata": meta,
-                }
-            )
+            # Lấy điểm số từ Reranker (nếu có, ưu tiên trường score của Flashrank)
+            relevance_score = meta.get("relevance_score")
+            if relevance_score is None:
+                relevance_score = meta.get("score")
+            
+            source_item = {
+                "content": doc.page_content,
+                "snippet": doc.page_content,
+                "file": file_name,
+                "file_name": file_name,
+                "page": page_value,
+                "chunk_index": citation_data.get("chunk_index"),
+                "citation": citation_label,
+                "metadata": meta,
+                "score": relevance_score,
+            }
+            
+            # Gán quyết định CRAG nếu có
+            if crag_decisions and i < len(crag_decisions):
+                source_item["crag_decision"] = crag_decisions[i]
+                
+            sources.append(source_item)
 
         return sources
 
@@ -265,7 +294,7 @@ class RAGChainManager:
         logger.info("Bắt đầu sinh câu trả lời")
         return streaming_chain.stream({"context": context, "question": query})
 
-    def stream_ask(self, question: str, conversational: bool = True):
+    def stream_ask(self, question: str, conversational: bool = True, use_crag: bool = False):
         """
         Generator xử lý câu hỏi và yield các gói thông tin (status, analysis, sources, chunk).
         Giúp UI hiển thị quá trình xử lý và streaming văn bản.
@@ -291,16 +320,58 @@ class RAGChainManager:
         retrieval_latency = time.time() - retrieval_start
         
         yield {"type": "analysis", "content": f"⏱️ **Thời gian truy hồi:** {retrieval_latency:.2f}s ({len(docs)} documents)"}
+
+        # 2b. Corrective RAG (CRAG) logic
+        final_docs = docs
+        if use_crag and docs:
+            yield {"type": "status", "content": "Đang kiểm duyệt độ liên quan của tài liệu (CRAG)..."}
+            eval_start = time.time()
+            
+            relevant_docs = []
+            relevant_decisions = []
+            decisions = []
+            
+            evaluator_chain = self.crag_evaluator_prompt | self.llm | StrOutputParser()
+            
+            # Đánh giá từng tài liệu (có thể chạy song song nếu muốn nhanh, nhưng ở đây chạy tuần tự cho ổn định)
+            for i, doc in enumerate(docs):
+                res = evaluator_chain.invoke({"context": doc.page_content, "question": query_for_retrieval})
+                decision = res.strip().upper()
+                decisions.append(decision)
+                
+                if "RELEVANT" in decision or "PARTIAL" in decision:
+                    relevant_docs.append(doc)
+                    relevant_decisions.append(decision)
+            
+            eval_latency = time.time() - eval_start
+            
+            # Ghi nhật ký quyết định CRAG
+            decision_counts = {d: decisions.count(d) for d in set(decisions)}
+            decision_summary = ", ".join([f"{k}: {v}" for k, v in decision_counts.items()])
+            yield {"type": "analysis", "content": f"⚖️ **CRAG Eval ({eval_latency:.2f}s):** {decision_summary}"}
+            
+            if not relevant_docs:
+                yield {"type": "analysis", "content": "⚠️ **Cảnh báo:** Không có tài liệu nào đủ độ liên quan. Hệ thống sẽ trả lời dựa trên kiến thức chung hoặc từ chối."}
+                final_docs = []
+                sources = []
+            else:
+                final_docs = relevant_docs
+                # Chỉ hiển thị những nguồn mà CRAG đánh dấu là RELEVANT/PARTIAL
+                sources = self._build_sources_from_docs(relevant_docs, crag_decisions=relevant_decisions)
+
         yield {"type": "sources", "content": sources}
 
         # 3. Tổng hợp câu trả lời
         if not sources:
-            yield {"type": "status", "content": "Không tìm thấy thông tin trực tiếp, đang trả lời dựa trên kiến thức chung..."}
+            if use_crag and docs:
+                yield {"type": "status", "content": "Tài liệu không khớp, đang trả lời bằng kiến thức hệ thống..."}
+            else:
+                yield {"type": "status", "content": "Không tìm thấy thông tin trực tiếp, đang trả lời dựa trên kiến thức chung..."}
         else:
             yield {"type": "status", "content": "Đang tổng hợp câu trả lời từ tài liệu..."}
 
         gen_start = time.time()
-        stream_generator = self._build_prompt_and_generate(query_for_retrieval, docs, conversational)
+        stream_generator = self._build_prompt_and_generate(query_for_retrieval, final_docs, conversational)
         
         full_answer = ""
         for chunk in stream_generator:

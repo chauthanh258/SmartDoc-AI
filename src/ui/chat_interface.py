@@ -28,8 +28,24 @@ def _render_sources(sources: list):
                 or "Tài liệu"
             )
             content = source.get("snippet", source.get("content", ""))
+            
+            # Metadata bổ sung: Score và CRAG Decision
+            score = source.get("score")
+            crag_decision = source.get("crag_decision")
+            
+            meta_info = []
+            if score is not None:
+                meta_info.append(f"📊 Score: **{score:.2f}**")
+            if crag_decision:
+                emoji = "✅" if crag_decision == "RELEVANT" else "⚠️"
+                meta_info.append(f"{emoji} CRAG: **{crag_decision}**")
+                
+            meta_str = " | ".join(meta_info)
+            if meta_str:
+                meta_str = f" — {meta_str}"
+
             st.markdown(
-                f"**Nguồn {idx + 1}:** `{file}` — Trang {page}",
+                f"**Nguồn {idx + 1}:** `{file}` — Trang {page}{meta_str}",
             )
             st.info(content[:500] + ("..." if len(content) > 500 else ""))
 
@@ -51,10 +67,13 @@ def _sync_rag_history(rag_manager, history: list[dict]):
 def render_chat_interface(rag_manager):
     """Giao diện chat chính, hiển thị lịch sử và nhận câu hỏi."""
     conversational_mode = st.session_state.get("conversational_mode", True)
+    crag_mode = st.session_state.get("crag_mode", False)
     hybrid = st.session_state.get("hybrid_search", False)
     rerank = st.session_state.get("reranking", False)
 
     mode_parts = ["💬 Conv. RAG" if conversational_mode else "⚡ Basic RAG"]
+    if crag_mode:
+        mode_parts.append("⚖️ CRAG")
     if hybrid:
         mode_parts.append("🔀 Hybrid")
     if rerank:
@@ -104,7 +123,7 @@ def render_chat_interface(rag_manager):
                 # Generator wrapper để st.write_stream có thể tiêu thụ chunks
                 def stream_generator():
                     nonlocal full_answer, sources
-                    for packet in rag_manager.stream_ask(prompt, conversational=conversational_mode):
+                    for packet in rag_manager.stream_ask(prompt, conversational=conversational_mode, use_crag=crag_mode):
                         if packet["type"] == "status":
                             status.update(label=packet["content"])
                         elif packet["type"] == "analysis":
