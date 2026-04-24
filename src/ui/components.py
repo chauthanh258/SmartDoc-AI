@@ -49,6 +49,7 @@ def render_settings_panel():
         "input_ollama_local_model": config.OLLAMA_LOCAL_MODEL,
         "input_ollama_cloud_model": config.OLLAMA_CLOUD_MODEL,
         "input_ollama_api_key": config.OLLAMA_API_KEY,
+        "crag_mode": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -108,6 +109,20 @@ def render_settings_panel():
             st.success("✅ Đang dùng Conversational RAG")
         else:
             st.info("⚡ Đang dùng Basic RAG (không nhớ lịch sử)")
+
+        crag_mode = st.toggle(
+            "Chế độ CRAG (Corrective RAG)",
+            value=st.session_state.crag_mode,
+            help=(
+                "**Bật:** Hệ thống sẽ đánh giá độ liên quan của tài liệu trước khi trả lời. "
+                "Nếu tài liệu không liên quan, nó sẽ cảnh báo hoặc tìm cách xử lý khác (giảm thiểu hallucination).\n\n"
+                "**Tắt:** RAG truyền thống."
+            ),
+            key="toggle_crag",
+        )
+        st.session_state.crag_mode = crag_mode
+        if crag_mode:
+            st.success("🎯 Đang bật CRAG (Kiểm soát chất lượng)")
 
         st.divider()
 
@@ -288,6 +303,7 @@ def render_settings_panel():
         "chunk_size": st.session_state.chunk_size,
         "chunk_overlap": st.session_state.chunk_overlap,
         "conversational_mode": st.session_state.conversational_mode,
+        "crag_mode": st.session_state.crag_mode,
         "hybrid_search": st.session_state.hybrid_search,
         "reranking": st.session_state.reranking,
         "ollama_mode": st.session_state.ollama_mode_effective,

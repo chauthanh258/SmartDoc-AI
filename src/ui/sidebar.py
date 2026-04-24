@@ -67,6 +67,7 @@ def render_sidebar(vs_manager):
 
         st.divider()
 
+
         # ── Tải tài liệu (Phase 3: multiple=True) ─────────────────────────
         st.subheader("📂 Tài liệu")
         uploaded_files = st.file_uploader(
@@ -82,6 +83,11 @@ def render_sidebar(vs_manager):
             for f in uploaded_files:
                 size_mb = f.size / (1024 * 1024)
                 st.caption(f"  📄 {f.name} ({size_mb:.1f} MB)")
+
+        st.divider()
+
+        # ── Bộ lọc tài liệu (Phase 3) ─────────────────────────────────────
+        selected_docs = render_document_filter(vs_manager)
 
         st.divider()
 
@@ -117,10 +123,7 @@ def render_sidebar(vs_manager):
 
         st.divider()
 
-        # ── Bộ lọc tài liệu (Phase 3) ─────────────────────────────────────
-        selected_docs = render_document_filter(vs_manager)
-
-        st.divider()
+       
 
         # ── Quản lý Conversations ──────────────────────────────────────────
         st.subheader("💬 Cuộc trò chuyện")

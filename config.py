@@ -22,11 +22,11 @@ OLLAMA_LOCAL_MODEL = os.getenv("OLLAMA_LOCAL_MODEL", LLM_MODEL)
 OLLAMA_CLOUD_BASE_URL = os.getenv("OLLAMA_CLOUD_BASE_URL", OLLAMA_PROXY_BASE_URL)
 OLLAMA_CLOUD_MODEL = os.getenv("OLLAMA_CLOUD_MODEL", LLM_MODEL)
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
 # RAG Configuration
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = 600
+CHUNK_OVERLAP = 300
 TEMPERATURE = 0.1
 
 # Ensure directories exist
