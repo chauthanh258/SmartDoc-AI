@@ -7,13 +7,101 @@ from uuid import uuid4
 from langchain_community.document_loaders import Docx2txtLoader, PDFPlumberLoader
 from langchain_core.documents import Document
 
+# Import logger (nhẹ, không kéo theo PaddleOCR cho đến khi cần)
+from src.utils.logger import logger
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".docm"}
+
+# ── Separator dùng khi gắn OCR text vào page_content ─────────────────────────
+_OCR_SEPARATOR = "\n\n[Nội dung từ ảnh/biểu đồ]:\n"
 
 
 def _new_doc_id() -> str:
     """Generate a globally unique identifier for each uploaded document."""
     return str(uuid4())
+
+
+def clean_ocr_result(ocr_result: Any) -> str:
+    """Làm sạch output từ OCR engine.
+    
+    Hỗ trợ cả dạng chuỗi trực tiếp hoặc list kết quả thô.
+    Đảm bảo output luôn là string valid (không None, không object) và không gây lỗi cho tokenizer.
+    
+    Xử lý các trường hợp:
+    - None → ""
+    - str → chuỗi đã trim
+    - list of (box, text, score) → join all text elements
+    - list of str → join all elements
+    - bytes → decode to UTF-8
+    - dict/object → str() conversion
+    """
+    # Trường hợp None hoặc rỗng
+    if ocr_result is None:
+        return ""
+    
+    # Trường hợp string thô
+    if isinstance(ocr_result, str):
+        return ocr_result.strip()
+    
+    # Trường hợp bytes
+    if isinstance(ocr_result, bytes):
+        try:
+            return ocr_result.decode("utf-8").strip()
+        except (UnicodeDecodeError, AttributeError):
+            return ""
+    
+    # Trường hợp list (list of tuples từ RapidOCR, hoặc list of strings)
+    if isinstance(ocr_result, list):
+        texts = []
+        for item in ocr_result:
+            if item is None:
+                continue
+            # Tuple hoặc list: RapidOCR format là [box, text, score]
+            # Cấu trúc: box (list/tuple), text (str), score (float)
+            if isinstance(item, (list, tuple)):
+                # Với RapidOCR: [(box_coords, text_str, confidence), ...]
+                # Lấy phần text (thường ở index 1)
+                if len(item) >= 2 and isinstance(item[1], str) and item[1].strip():
+                    texts.append(item[1].strip())
+                # Fallback: nếu không, tìm string đầu tiên trong tuple
+                elif len(item) >= 1:
+                    for element in item:
+                        if isinstance(element, str) and element.strip():
+                            texts.append(element.strip())
+                            break
+            elif isinstance(item, str):
+                # String trực tiếp trong list
+                if item.strip():
+                    texts.append(item.strip())
+            elif isinstance(item, dict):
+                # Nếu item là dict, tìm key 'text' hoặc 'content'
+                text_value = item.get("text") or item.get("content")
+                if isinstance(text_value, str) and text_value.strip():
+                    texts.append(text_value.strip())
+        
+        # Join tất cả với newline để bảo toàn cấu trúc
+        cleaned = "\n".join(filter(None, texts))
+        return cleaned.strip()
+    
+    # Trường hợp dict (metadata hoặc structured result)
+    if isinstance(ocr_result, dict):
+        text_value = ocr_result.get("text") or ocr_result.get("content") or ocr_result.get("result")
+        if isinstance(text_value, str):
+            return text_value.strip()
+        elif isinstance(text_value, list):
+            # Recursive call để xử lý list bên trong
+            return clean_ocr_result(text_value)
+        return ""
+    
+    # Fallback: Convert bất kỳ object nào thành string
+    try:
+        result_str = str(ocr_result).strip()
+        # Kiểm tra nếu str() tạo ra các chuỗi vô ích như "<object at 0x...>"
+        if result_str.startswith("<") and result_str.endswith(">"):
+            return ""
+        return result_str
+    except Exception:
+        return ""
 
 
 def _normalize_upload_date(value: str | datetime | date | None) -> str:
@@ -201,11 +289,31 @@ def _attach_document_metadata(
 
         doc.metadata = metadata
 
-    return documents
+    # ── Sau khi load xong: Sanitization & Cleaning ─────────────────────────────
+    cleaned_docs = []
+    for doc in documents:
+        # 1. Đảm bảo page_content là string và được làm sạch
+        if doc.page_content is None:
+            doc.page_content = ""
+        elif not isinstance(doc.page_content, str):
+            # Nếu OCR trả về non-string, clean & convert sang string
+            doc.page_content = clean_ocr_result(doc.page_content)
+        
+        # 2. Làm sạch whitespace nhưng giữ nội dung
+        cleaned_content = doc.page_content.strip()
+        if not cleaned_content:
+            # Loại bỏ document rỗng (tránh lỗi FAISS/Embedding)
+            continue
+        
+        # 3. Cập nhật page_content với phiên bản đã làm sạch
+        doc.page_content = cleaned_content
+        cleaned_docs.append(doc)
+
+    return cleaned_docs
 
 
 def _load_pdf(file_path: Path) -> list[Document]:
-    """Load PDF and normalize metadata for citation-friendly retrieval."""
+    """Load PDF, normalize metadata, và tự động gắi OCR nếu bật trong config."""
     loader = PDFPlumberLoader(str(file_path))
     documents = loader.load()
 
@@ -232,11 +340,19 @@ def _load_pdf(file_path: Path) -> list[Document]:
 
         normalized_docs.append(Document(page_content=doc.page_content, metadata=metadata))
 
+    # ── OCR: xử lý ảnh nhúng và trang scan ─────────────────────────────────────
+    try:
+        import config
+        if config.OCR_ENABLED:
+            normalized_docs = _apply_ocr_to_pdf(file_path, normalized_docs, config)
+    except Exception as e:
+        logger.warning(f"OCR bị bỏ qua do lỗi (file: {file_path.name}): {e}")
+
     return normalized_docs
 
 
 def _load_docx(file_path: Path) -> list[Document]:
-    """Load DOCX/DOCM and preserve logical section metadata."""
+    """Load DOCX/DOCM, preserve logical section metadata, và tự động gắi OCR nếu bật."""
     loader = Docx2txtLoader(str(file_path))
     raw_documents = loader.load()
 
@@ -262,7 +378,146 @@ def _load_docx(file_path: Path) -> list[Document]:
                 Document(page_content=section_text, metadata=metadata)
             )
 
+    # ── OCR: xử lý ảnh nhúng trong DOCX ────────────────────────────────────────
+    try:
+        import config
+        if config.OCR_ENABLED:
+            enriched_documents = _apply_ocr_to_docx(file_path, enriched_documents)
+    except Exception as e:
+        logger.warning(f"OCR DOCX bị bỏ qua do lỗi (file: {file_path.name}): {e}")
+
     return enriched_documents
+
+
+# ── OCR Helper Functions ───────────────────────────────────────────────────────
+
+def _apply_ocr_to_pdf(
+    file_path: Path,
+    documents: list[Document],
+    config,
+) -> list[Document]:
+    """
+    Gọi OCR cho file PDF và merge kết quả vào danh sách Documents.
+
+    Hai trường hợp:
+    - Trang scan (full_page_scan): thay thế page_content nếu trang đang rỗng,
+      hoặc append nếu trang có ít text.
+    - Trang digital có ảnh nhúng (embedded_image): append OCR text vào cuối
+      page_content với separator rõ ràng.
+    """
+    from src.core.ocr_processor import get_ocr_processor
+
+    processor = get_ocr_processor()
+    ocr_results = processor.process_pdf_for_ocr(
+        file_path,
+        dpi=config.OCR_DPI,
+        scan_text_threshold=config.OCR_SCAN_TEXT_THRESHOLD,
+    )
+
+    if not ocr_results:
+        return documents
+
+    # Index documents theo page_number để merge nhanh
+    page_to_doc: dict[int, Document] = {}
+    for doc in documents:
+        pnum = doc.metadata.get("page_number")
+        if pnum is not None:
+            page_to_doc[int(pnum)] = doc
+
+    for result in ocr_results:
+        doc = page_to_doc.get(result.page_number)
+        if doc is None:
+            # Tạo Document mới nếu không tìm thấy trang tương ứng
+            cleaned_text = clean_ocr_result(result.text)
+            if not cleaned_text:
+                continue
+            new_doc = Document(
+                page_content=cleaned_text,
+                metadata={
+                    "source": str(file_path),
+                    "file_name": file_path.name,
+                    "page_number": result.page_number,
+                    "has_ocr": True,
+                    "ocr_source_type": result.source_type,
+                    "ocr_confidence": round(result.confidence, 3),
+                },
+            )
+            documents.append(new_doc)
+            page_to_doc[result.page_number] = new_doc
+            continue
+
+        # Merge OCR text vào Document hiện có
+        existing_text = doc.page_content.strip()
+        ocr_text = clean_ocr_result(result.text)
+
+        if not ocr_text:
+            continue
+
+        if result.source_type == "full_page_scan" and len(existing_text) < config.OCR_SCAN_TEXT_THRESHOLD:
+            # Trang scan: thay thế toàn bộ (text cũ rỗng hoặc không có nghĩa)
+            doc.page_content = ocr_text
+        else:
+            # Ảnh nhúng hoặc trang scan có cả text: append
+            doc.page_content = existing_text + _OCR_SEPARATOR + ocr_text
+
+        # Cập nhật metadata
+        meta = dict(doc.metadata)
+        meta["has_ocr"] = True
+        # ocr_regions là list các metadata OCR block (có thể có nhiều block/trang)
+        ocr_region = {
+            "source_type": result.source_type,
+            "image_index": result.image_index,
+            "confidence": round(result.confidence, 3),
+        }
+        existing_regions = meta.get("ocr_regions", [])
+        if not isinstance(existing_regions, list):
+            existing_regions = []
+        existing_regions.append(ocr_region)
+        meta["ocr_regions"] = existing_regions
+        doc.metadata = meta
+
+    return documents
+
+
+def _apply_ocr_to_docx(
+    file_path: Path,
+    documents: list[Document],
+) -> list[Document]:
+    """
+    Gọi OCR cho file DOCX và append kết quả vào Document đầu tiên
+    (do DOCX không có khái niệm trang rõ ràng, OCR text gắn vào section đầu).
+    """
+    from src.core.ocr_processor import get_ocr_processor
+
+    processor = get_ocr_processor()
+    ocr_results = processor.process_docx_for_ocr(file_path)
+
+    if not ocr_results or not documents:
+        return documents
+
+    # Append tất cả OCR text vào Document đầu tiên của DOCX
+    # (thường section 1 = phần tổng quan)
+    all_ocr_texts = [clean_ocr_result(r.text) for r in ocr_results if clean_ocr_result(r.text)]
+    if all_ocr_texts:
+        combined_ocr = "\n".join(all_ocr_texts)
+        target_doc = documents[0]
+        target_doc.page_content = (
+            target_doc.page_content.strip() + _OCR_SEPARATOR + combined_ocr
+        )
+
+        meta = dict(target_doc.metadata)
+        meta["has_ocr"] = True
+        meta["ocr_regions"] = [
+            {
+                "source_type": r.source_type,
+                "image_index": r.image_index,
+                "confidence": round(r.confidence, 3),
+            }
+            for r in ocr_results
+        ]
+        target_doc.metadata = meta
+
+    return documents
 
 
 def load_document(
