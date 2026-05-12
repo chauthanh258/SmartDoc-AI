@@ -78,18 +78,31 @@ def format_citation(metadata: Mapping[str, Any]) -> str:
 
     For DOCX sections (no page number), the format becomes:
     [Muc Gioi thieu - sample.docx]
+
+    When OCR content is present, an OCR badge is appended:
+    [Trang 2 - sample.pdf | 📷 OCR]
     """
     file_name = _resolve_file_name(metadata) or "unknown_source"
     page_number = _to_int_or_none(metadata.get("page_number"))
     section = metadata.get("section")
+    has_ocr = metadata.get("has_ocr", False)
+    ocr_source_type = metadata.get("ocr_source_type", "")
+
+    # Build OCR suffix
+    ocr_badge = ""
+    if has_ocr:
+        if ocr_source_type == "full_page_scan":
+            ocr_badge = " | 📷 Scan"
+        else:
+            ocr_badge = " | 🖼️ OCR"
 
     if page_number is not None:
-        return f"[Trang {page_number} - {file_name}]"
+        return f"[Trang {page_number} - {file_name}{ocr_badge}]"
 
     if section:
-        return f"[Muc {section} - {file_name}]"
+        return f"[Muc {section} - {file_name}{ocr_badge}]"
 
-    return f"[{file_name}]"
+    return f"[{file_name}{ocr_badge}]"
 
 
 def format_document_citation(document: Document) -> str:

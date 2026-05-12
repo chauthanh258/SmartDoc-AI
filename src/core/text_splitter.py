@@ -64,6 +64,10 @@ def _enrich_chunk_metadata(chunk: Document, chunk_index: int) -> Document:
     metadata["chunk_index"] = chunk_index
     chunk.metadata = metadata
 
+    # Validate page_content is a string (defensive check)
+    if not isinstance(chunk.page_content, str):
+        chunk.page_content = str(chunk.page_content) if chunk.page_content else ""
+
     # Contextual Chunking: Attach document identity directly to the text
     # so that the vector embedding includes the doc context.
     file_name = metadata.get("file_name", "Unknown Document")

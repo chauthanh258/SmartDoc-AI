@@ -9,6 +9,7 @@ warnings.filterwarnings(
     message=r"Accessing `__path__` from .*",
     category=FutureWarning,
 )
+# pyrefly: ignore [missing-import]
 import streamlit as st
 import config
 from src.core.document_loader import load_multiple_documents
@@ -185,7 +186,13 @@ if uploaded_files:
             # Đọc tất cả file mới cùng lúc bằng load_multiple_documents
             st.write(f"📖 Đọc {len(uploaded_files)} tài liệu...")
             docs = load_multiple_documents(saved_paths, skip_failed=True)
-            st.write(f"✅ Đọc xong: {len(docs)} trang/section")
+
+            # Hiển thị thống kê OCR nếu có
+            ocr_pages = sum(1 for d in docs if d.metadata.get("has_ocr"))
+            if config.OCR_ENABLED and ocr_pages > 0:
+                st.write(f"✅ Đọc xong: {len(docs)} trang/section | 📷 **{ocr_pages} trang/section có nội dung OCR**")
+            else:
+                st.write(f"✅ Đọc xong: {len(docs)} trang/section")
 
             # Lấy chunk settings từ session_state (clamp về whitelist)
             chunk_size = st.session_state.get("chunk_size", config.CHUNK_SIZE)
@@ -199,15 +206,33 @@ if uploaded_files:
 
             st.write(f"✂️ Chunk size={chunk_size}, overlap={chunk_overlap}")
             chunks = split_documents(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-            st.write(f"✅ Tạo ra {len(chunks)} đoạn văn bản")
+
+            print("=== CHUNKS TO BE SAVED ===")
+            for i, chunk in enumerate(chunks, start=1):
+                meta = chunk.metadata or {}
+                print(f"\n--- Chunk {i} ---")
+                print(f"file_name: {meta.get('file_name')}")
+                print(f"page_number: {meta.get('page_number')}")
+                print(f"section: {meta.get('section')}")
+                print(f"chunk_index: {meta.get('chunk_index')}")
+                print("content:")
+                print(chunk.page_content)  # cắt bớt nếu quá dài
+            # Đảm bảo tất cả chunks đều có nội dung hợp lệ (string và không rỗng)
+            chunks = [
+                c for c in chunks 
+                if isinstance(c.page_content, str) and c.page_content.strip()
+            ]
 
             # Thêm vào vectorstore (append nếu đã có, tạo mới nếu chưa có)
-            st.write("🗂️ Cập nhật Vector Index...")
-            if vectorstore is None:
-                vectorstore = vs_manager.create_vectorstore(chunks)
+            if not chunks:
+                st.error("⚠️ Không tìm thấy nội dung văn bản để trích xuất (có thể file bị lỗi hoặc không có text).")
             else:
-                vs_manager.vectorstore = vectorstore
-                vectorstore = vs_manager.add_documents(chunks)
+                st.write("🗂️ Cập nhật Vector Index...")
+                if vectorstore is None:
+                    vectorstore = vs_manager.create_vectorstore(chunks)
+                else:
+                    vs_manager.vectorstore = vectorstore
+                    vectorstore = vs_manager.add_documents(chunks)
             vs_manager.save_vectorstore()
 
             # Ensure manager has the in-memory reference and update the RAG retriever
@@ -264,6 +289,7 @@ if vs_manager.vectorstore is not None:
     # Nếu dùng hybrid, ta truyền cả chunks và filter. 
     if use_hybrid:
         docstore_dict = getattr(vs_manager.vectorstore.docstore, "_dict", {})
+        # pyrefly: ignore [missing-import]
         from langchain_core.documents import Document as LCDoc
         all_chunks = [
             doc for doc in docstore_dict.values() if isinstance(doc, LCDoc)

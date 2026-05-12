@@ -29,6 +29,14 @@ CHUNK_SIZE = 600
 CHUNK_OVERLAP = 300
 TEMPERATURE = 0.1
 
+# OCR Configuration
+OCR_ENABLED = os.getenv("OCR_ENABLED", "true").lower() == "true"
+OCR_USE_GPU = os.getenv("OCR_USE_GPU", "false").lower() == "true"
+OCR_LANGUAGE = os.getenv("OCR_LANGUAGE", "vi")           # 'vi', 'en', 'ch'
+OCR_MIN_CONFIDENCE = float(os.getenv("OCR_MIN_CONFIDENCE", "0.6"))
+OCR_DPI = int(os.getenv("OCR_DPI", "200"))               # DPI render PDF page
+OCR_SCAN_TEXT_THRESHOLD = int(os.getenv("OCR_SCAN_TEXT_THRESHOLD", "10"))  # ký tự tối thiểu để coi trang là digital
+
 # Ensure directories exist
 for directory in [UPLOAD_DIR, SAMPLES_DIR, VECTORSTORE_DIR, LOGS_DIR]:
     if not os.path.exists(directory):

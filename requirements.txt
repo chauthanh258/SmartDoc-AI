@@ -15,3 +15,6 @@ python-docx
 langchain-classic   
 flashrank
 rank-bm25
+# OCR dependencies
+rapidocr-onnxruntime
+Pillow
