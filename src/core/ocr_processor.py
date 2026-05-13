@@ -1,14 +1,14 @@
 # src/core/ocr_processor.py
 """
-OCR Pipeline sử dụng RapidOCR để nhận diện text từ ảnh trong tài liệu.
-RapidOCR được chọn vì tính tương thích cao với Python 3.14+ thông qua ONNX Runtime.
+OCR Pipeline sử dụng PaddleOCR để nhận diện text từ ảnh trong tài liệu.
+PaddleOCR được chọn vì hiệu suất vượt trội cho tiếng Việt và khả năng xử lý layout tốt.
 
 Hỗ trợ:
 - PDF digital (có text layer): tách ảnh nhúng (biểu đồ, con dấu) → OCR
 - PDF scan (không có text layer): render toàn trang → OCR
 - DOCX: tách ảnh nhúng → OCR
 
-RapidOCR được lazy-initialized (singleton) để tránh load model nhiều lần.
+PaddleOCR được lazy-initialized (singleton) để tránh load model nhiều lần.
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ import io
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
-logger = logging.getLogger(__name__)
+from src.utils.logger import logger
 
 # ---------------------------------------------------------------------------
 # OCRResult dataclass
@@ -62,7 +62,7 @@ class OCRResult:
 
 class OCRProcessor:
     """
-    Wrapper RapidOCR với lazy initialization và singleton pattern.
+    Wrapper PaddleOCR với lazy initialization và singleton pattern.
 
     Sử dụng:
         processor = OCRProcessor.get_instance()
@@ -76,6 +76,13 @@ class OCRProcessor:
         self._lang = lang
         self._min_confidence = min_confidence
         self._engine = None  # lazy init khi cần
+        
+        # Mapping lang code cho PaddleOCR
+        self._lang_map = {
+            "vi": "vi",
+            "en": "en",
+            "ch": "ch"
+        }
 
     @classmethod
     def get_instance(cls, use_gpu: bool = False, lang: str = "vi", min_confidence: float = 0.6) -> OCRProcessor:
@@ -90,18 +97,18 @@ class OCRProcessor:
         cls._instance = None
 
     def _get_ocr_engine(self):
-        """Lazy init RapidOCR engine."""
+        """Lazy init RapidOCR engine (Lightweight & Stable)."""
         if self._engine is None:
             try:
                 from rapidocr_onnxruntime import RapidOCR
-                logger.info(f"Khởi tạo RapidOCR (lang={self._lang})...")
-                # RapidOCR tự động detect và sử dụng các model phù hợp
+                logger.info("Khởi tạo RapidOCR...")
                 self._engine = RapidOCR()
+                self._engine_type = "rapid"
                 logger.info("RapidOCR đã sẵn sàng.")
+                return self._engine
             except ImportError:
-                raise ImportError(
-                    "RapidOCR chưa được cài đặt. Chạy: pip install rapidocr-onnxruntime"
-                )
+                logger.error("Không tìm thấy RapidOCR. Vui lòng cài đặt: pip install rapidocr-onnxruntime")
+                raise ImportError("RapidOCR chưa được cài đặt.")
         return self._engine
 
     # -----------------------------------------------------------------------
@@ -110,57 +117,34 @@ class OCRProcessor:
 
     def run_ocr_on_image(self, image) -> tuple[str, float, list[str]]:
         """
-        Chạy RapidOCR trên một ảnh.
-
-        Args:
-            image: PIL.Image hoặc numpy array
-
-        Returns:
-            (text, avg_confidence, lines_list)
-            - text: toàn bộ text đã ghép, lọc theo min_confidence
-            - avg_confidence: trung bình confidence
-            - lines_list: danh sách từng dòng text
+        Chạy OCR engine (RapidOCR).
         """
         import numpy as np
-
         engine = self._get_ocr_engine()
-
-        # Chuyển PIL Image → numpy array nếu cần
+        
         if hasattr(image, "convert"):
             image = np.array(image.convert("RGB"))
 
         try:
-            # RapidOCR trả về: [result, elapse]
-            # result: [[box, text, confidence], ...]
+            # RapidOCR output format: [ [ [box], text, confidence ], ... ]
             result, _ = engine(image)
-        except Exception as e:
-            logger.warning(f"RapidOCR gặp lỗi khi xử lý ảnh: {e}")
-            return "", 0.0, []
-
-        if not result:
-            return "", 0.0, []
-
-        lines = []
-        confidences = []
-        for line in result:
-            if not line or len(line) < 3:
-                continue
-            text_content, conf = line[1], line[2]
-            try:
-                f_conf = float(conf)
-            except (ValueError, TypeError):
-                f_conf = 0.0
+            if not result: return "", 0.0, []
+            
+            lines, confs = [], []
+            for line in result:
+                if line and len(line) >= 3:
+                    text_content = line[1].strip()
+                    conf = float(line[2])
+                    if text_content and conf >= self._min_confidence:
+                        lines.append(text_content)
+                        confs.append(conf)
+            
+            avg_conf = sum(confs) / len(confs) if confs else 0.0
+            return "\n".join(lines), avg_conf, lines
                 
-            if f_conf >= self._min_confidence and text_content.strip():
-                lines.append(text_content.strip())
-                confidences.append(f_conf)
-
-        if not lines:
+        except Exception as e:
+            logger.warning(f"OCR gặp lỗi: {e}")
             return "", 0.0, []
-
-        combined_text = "\n".join(lines)
-        avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
-        return combined_text, avg_conf, lines
 
     # -----------------------------------------------------------------------
     # Tách ảnh từ PDF và chạy OCR
@@ -174,20 +158,6 @@ class OCRProcessor:
     ) -> list[OCRResult]:
         """
         Xử lý OCR cho toàn bộ file PDF.
-
-        Logic:
-        - Nếu trang có ít hơn `scan_text_threshold` ký tự text → trang scan
-          → render toàn trang thành ảnh → OCR
-        - Nếu trang có text đủ → trang digital
-          → chỉ tách các ảnh nhúng → OCR từng ảnh
-
-        Args:
-            file_path: đường dẫn đến file PDF
-            dpi: độ phân giải khi render trang scan (cao hơn = chất lượng tốt hơn, chậm hơn)
-            scan_text_threshold: số ký tự tối thiểu để coi trang là digital
-
-        Returns:
-            Danh sách OCRResult, có thể rỗng nếu không có ảnh/scan.
         """
         try:
             import fitz  # PyMuPDF
@@ -207,15 +177,13 @@ class OCRProcessor:
 
         for page_num in range(len(doc)):
             page = doc[page_num]
-            page_number = page_num + 1  # 1-indexed
+            page_number = page_num + 1
 
-            # Lấy text có sẵn của trang
             existing_text = page.get_text("text").strip()
             is_scanned_page = len(existing_text) < scan_text_threshold
 
             if is_scanned_page:
-                # ── Trang scan: render toàn trang → OCR ──────────────────
-                logger.debug(f"  Trang {page_number}: scan (text={len(existing_text)} ký tự) → OCR full page")
+                logger.debug(f"  Trang {page_number}: scan → OCR full page")
                 ocr_text, avg_conf, lines = self._ocr_pdf_full_page(page, dpi=dpi)
 
                 if ocr_text.strip():
@@ -229,29 +197,25 @@ class OCRProcessor:
                         ocr_lines=lines,
                     ))
             else:
-                # ── Trang digital: tách ảnh nhúng → OCR ──────────────────
                 embedded_results = self._ocr_embedded_images_in_page(page, page_number, path.name)
                 if embedded_results:
-                    logger.debug(f"  Trang {page_number}: digital → {len(embedded_results)} vùng ảnh OCR")
+                    logger.debug(f"  Trang {page_number}: digital → {len(embedded_results)} ảnh nhúng OCR")
                 results.extend(embedded_results)
 
         doc.close()
-        logger.info(f"OCR hoàn tất '{path.name}': {len(results)} vùng ảnh được nhận diện")
         return results
 
     def _ocr_pdf_full_page(self, page, dpi: int = 200) -> tuple[str, float, list[str]]:
         """Render trang PDF thành ảnh rồi OCR."""
         try:
             import fitz
-            mat = fitz.Matrix(dpi / 72, dpi / 72)  # 72 DPI là mặc định của PDF
+            import numpy as np
+            mat = fitz.Matrix(dpi / 72, dpi / 72)
             pix = page.get_pixmap(matrix=mat, alpha=False)
 
-            # Chuyển sang numpy array
-            import numpy as np
             img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                 pix.height, pix.width, pix.n
             )
-            # PyMuPDF trả về RGB, đảm bảo 3 channels
             if pix.n == 4:
                 img_array = img_array[:, :, :3]
 
@@ -275,11 +239,8 @@ class OCRProcessor:
             try:
                 base_image = page.parent.extract_image(xref)
                 img_bytes = base_image["image"]
-                img_ext = base_image.get("ext", "png")
-
                 image = Image.open(io.BytesIO(img_bytes))
 
-                # Bỏ qua ảnh quá nhỏ (icon, watermark, v.v.)
                 if image.width < 50 or image.height < 50:
                     continue
 
@@ -308,12 +269,6 @@ class OCRProcessor:
     def process_docx_for_ocr(self, file_path: str | Path) -> list[OCRResult]:
         """
         Xử lý OCR cho tất cả ảnh nhúng trong file DOCX/DOCM.
-
-        Args:
-            file_path: đường dẫn đến file DOCX
-
-        Returns:
-            Danh sách OCRResult.
         """
         try:
             from docx import Document as DocxDocument
@@ -330,7 +285,6 @@ class OCRProcessor:
             logger.error(f"Không thể mở DOCX {path.name}: {e}")
             return []
 
-        # Lấy ảnh từ relationships của document
         image_parts = []
         for rel in doc.part.rels.values():
             if "image" in rel.reltype:
@@ -338,8 +292,6 @@ class OCRProcessor:
                     image_parts.append(rel.target_part)
                 except Exception:
                     continue
-
-        logger.info(f"OCR DOCX '{path.name}': {len(image_parts)} ảnh nhúng")
 
         for img_index, img_part in enumerate(image_parts):
             try:
@@ -354,7 +306,7 @@ class OCRProcessor:
                 if ocr_text.strip():
                     results.append(OCRResult(
                         text=ocr_text,
-                        page_number=0,    # DOCX không có số trang rõ ràng
+                        page_number=0,
                         image_index=img_index,
                         confidence=avg_conf,
                         source_type="docx_image",
@@ -365,18 +317,16 @@ class OCRProcessor:
                 logger.debug(f"Bỏ qua ảnh DOCX {img_index}: {e}")
                 continue
 
-        logger.info(f"OCR DOCX hoàn tất '{path.name}': {len(results)} vùng ảnh được nhận diện")
         return results
 
 
 # ---------------------------------------------------------------------------
-# Factory function (dùng từ bên ngoài)
+# Factory function
 # ---------------------------------------------------------------------------
 
 def get_ocr_processor() -> OCRProcessor:
     """
     Trả về singleton OCRProcessor được cấu hình từ config.py.
-    Import hàm này thay vì tạo OCRProcessor trực tiếp.
     """
     import config
     return OCRProcessor.get_instance(
@@ -384,3 +334,4 @@ def get_ocr_processor() -> OCRProcessor:
         lang=config.OCR_LANGUAGE,
         min_confidence=config.OCR_MIN_CONFIDENCE,
     )
+
