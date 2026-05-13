@@ -15,6 +15,9 @@ python-docx
 langchain-classic   
 flashrank
 rank-bm25
-# OCR dependencies
+# Advanced PDF & OCR stack (Optimized for Python 3.14)
+pymupdf4llm
+pymupdf
+pdfplumber
 rapidocr-onnxruntime
 Pillow
