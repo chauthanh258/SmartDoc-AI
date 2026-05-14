@@ -381,6 +381,7 @@ def add_chat_turn(
     question: str,
     answer: str,
     sources: list[Any] | None = None,
+    analysis: str | None = None,
     conversation_id: str | None = None,
     document_id: str | None = None,
     document_name: str | None = None,
@@ -420,6 +421,7 @@ def add_chat_turn(
         "question": question.strip(),
         "answer": answer.strip(),
         "sources": normalized_sources,
+        "analysis": (analysis or "").strip() or None,
         "document_ids": related_document_ids,
         "metadata": ensure_dict(metadata),
     }

@@ -98,6 +98,9 @@ def render_chat_interface(rag_manager):
             st.markdown(entry["question"])
 
         with st.chat_message("assistant"):
+            if entry.get("analysis"):
+                with st.expander("🔍 Xem quá trình suy nghĩ", expanded=False):
+                    st.markdown(entry["analysis"])
             st.markdown(entry["answer"])
             if entry.get("sources"):
                 _render_sources(entry["sources"])
@@ -132,7 +135,7 @@ def render_chat_interface(rag_manager):
                         elif packet["type"] == "sources":
                             sources = packet["content"]
                         elif packet["type"] == "chunk":
-                            # Khi nhận được chunk đầu tiên, đóng status lại để tập trung vào câu trả lời
+                            # Khi nhận được chunk đầu tiên, giữ trạng thái ổn định để tránh nhảy layout
                             status.update(label="✅ Đã xử lý xong", state="complete", expanded=True)
                             full_answer += packet["content"]
                             yield packet["content"]
@@ -150,10 +153,12 @@ def render_chat_interface(rag_manager):
 
         # 3. Lưu vào lịch sử tập trung
         if full_answer:
+            thought_process = "\n".join(accumulated_analysis)
             add_chat_turn(
                 question=prompt,
                 answer=full_answer,
-                sources=sources
+                sources=sources,
+                analysis=thought_process,
             )
         # Tự động reload để cập nhật sidebar nếu cần
         st.rerun()
