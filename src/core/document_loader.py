@@ -312,43 +312,67 @@ def _attach_document_metadata(
     return cleaned_docs
 
 
-def _load_pdf(file_path: Path) -> list[Document]:
-    """Load PDF, normalize metadata, và tự động gắi OCR nếu bật trong config."""
+def _load_pdf_pymupdf4llm(file_path: Path) -> list[Document]:
+    """
+    Sử dụng PyMuPDF4LLM để biến PDF thành Markdown.
+    Đây là giải pháp chính cho Python 3.14.
+    """
+    try:
+        import pymupdf4llm
+        logger.info(f"Đang parse PDF bằng PyMuPDF4LLM: {file_path.name}")
+        
+        md_pages = pymupdf4llm.to_markdown(
+            str(file_path),
+            page_chunks=True,
+            show_progress=False
+        )
+
+        documents = []
+        for page in md_pages:
+            content = page.get("text", "").strip()
+            if not content: continue
+                
+            metadata = {
+                "source": str(file_path),
+                "file_name": file_path.name,
+                "page_number": page.get("metadata", {}).get("page_number", 1),
+                "parser": "pymupdf4llm",
+                "format": "markdown"
+            }
+            documents.append(Document(page_content=content, metadata=metadata))
+        return documents
+    except (ImportError, Exception) as e:
+        logger.warning(f"PyMuPDF4LLM không khả dụng hoặc lỗi: {e}. Thử Fallback.")
+        return _load_pdf_fallback(file_path)
+
+
+def _load_pdf_fallback(file_path: Path) -> list[Document]:
+    """Fallback cuối cùng: PDFPlumber."""
     loader = PDFPlumberLoader(str(file_path))
     documents = loader.load()
+    if not documents: return []
 
-    if not documents:
-        return []
-
-    page_values = [_to_int_or_none(doc.metadata.get("page")) for doc in documents]
-    page_values = [value for value in page_values if value is not None]
-    zero_based_pages = bool(page_values) and min(page_values) == 0
-
-    normalized_docs: list[Document] = []
+    normalized_docs = []
     for index, doc in enumerate(documents):
         metadata = dict(doc.metadata or {})
-
-        raw_page = _to_int_or_none(metadata.get("page"))
-        if raw_page is None:
-            page_number = index + 1
-        else:
-            page_number = raw_page + 1 if zero_based_pages else raw_page
-
         metadata["source"] = str(file_path)
         metadata["file_name"] = file_path.name
-        metadata["page_number"] = page_number
-
+        metadata["page_number"] = index + 1
+        metadata["parser"] = "pdfplumber"
         normalized_docs.append(Document(page_content=doc.page_content, metadata=metadata))
-
-    # ── OCR: xử lý ảnh nhúng và trang scan ─────────────────────────────────────
+    
+    # Gắn OCR cho bản fallback nếu cần
     try:
         import config
         if config.OCR_ENABLED:
             normalized_docs = _apply_ocr_to_pdf(file_path, normalized_docs, config)
-    except Exception as e:
-        logger.warning(f"OCR bị bỏ qua do lỗi (file: {file_path.name}): {e}")
-
+    except: pass
     return normalized_docs
+
+
+def _load_pdf(file_path: Path) -> list[Document]:
+    """Entry point chính cho PDF: PyMuPDF4LLM > Unstructured > PDFPlumber."""
+    return _load_pdf_pymupdf4llm(file_path)
 
 
 def _load_docx(file_path: Path) -> list[Document]:
@@ -398,12 +422,7 @@ def _apply_ocr_to_pdf(
 ) -> list[Document]:
     """
     Gọi OCR cho file PDF và merge kết quả vào danh sách Documents.
-
-    Hai trường hợp:
-    - Trang scan (full_page_scan): thay thế page_content nếu trang đang rỗng,
-      hoặc append nếu trang có ít text.
-    - Trang digital có ảnh nhúng (embedded_image): append OCR text vào cuối
-      page_content với separator rõ ràng.
+    (Dùng cho fallback hoặc khi Unstructured không cover hết)
     """
     from src.core.ocr_processor import get_ocr_processor
 
@@ -463,7 +482,6 @@ def _apply_ocr_to_pdf(
         # Cập nhật metadata
         meta = dict(doc.metadata)
         meta["has_ocr"] = True
-        # ocr_regions là list các metadata OCR block (có thể có nhiều block/trang)
         ocr_region = {
             "source_type": result.source_type,
             "image_index": result.image_index,
@@ -484,8 +502,7 @@ def _apply_ocr_to_docx(
     documents: list[Document],
 ) -> list[Document]:
     """
-    Gọi OCR cho file DOCX và append kết quả vào Document đầu tiên
-    (do DOCX không có khái niệm trang rõ ràng, OCR text gắn vào section đầu).
+    Gọi OCR cho file DOCX và append kết quả vào Document đầu tiên.
     """
     from src.core.ocr_processor import get_ocr_processor
 
@@ -495,8 +512,6 @@ def _apply_ocr_to_docx(
     if not ocr_results or not documents:
         return documents
 
-    # Append tất cả OCR text vào Document đầu tiên của DOCX
-    # (thường section 1 = phần tổng quan)
     all_ocr_texts = [clean_ocr_result(r.text) for r in ocr_results if clean_ocr_result(r.text)]
     if all_ocr_texts:
         combined_ocr = "\n".join(all_ocr_texts)
@@ -527,10 +542,7 @@ def load_document(
     upload_date: str | datetime | date | None = None,
     language: str | None = None,
 ) -> list[Document]:
-    """Load PDF/DOCX and return LangChain Document objects.
-
-    Extracted text is returned as-is so Vietnamese characters are preserved.
-    """
+    """Load PDF/DOCX and return LangChain Document objects."""
     path = Path(file_path)
 
     if not path.exists() or not path.is_file():
@@ -551,6 +563,7 @@ def load_document(
         else:
             documents = _load_docx(path)
     except Exception as exc:
+        logger.error(f"Lỗi khi load tài liệu {file_path}: {exc}")
         raise RuntimeError(
             "Unable to read document. The file may be corrupted, encrypted, "
             f"or not parseable: {file_path}"
@@ -576,18 +589,7 @@ def load_multiple_documents(
     language_map: Mapping[str, str] | None = None,
     skip_failed: bool = True,
 ) -> list[Document]:
-    """Load multiple PDF/DOCX files and return one merged document list.
-
-    Each input file receives its own unique `doc_id`, while all chunks/pages of
-    that file share the same metadata group for filtering and citation.
-
-    Args:
-        file_paths: List of document paths.
-        upload_date: Optional shared upload timestamp for batch ingest.
-        language_map: Optional per-file language override.
-            Supports key by full path or filename.
-        skip_failed: If True, continue processing remaining files when one fails.
-    """
+    """Load multiple PDF/DOCX files."""
     if not file_paths:
         return []
 
@@ -623,12 +625,10 @@ def load_multiple_documents(
 
 
 def load_pdf(file_path: str) -> list[Document]:
-    """Backward-compatible PDF loader for existing call sites."""
+    """Backward-compatible PDF loader."""
     path = Path(file_path)
-
     if path.suffix.lower() != ".pdf":
         raise ValueError("load_pdf only accepts .pdf files.")
-
     return load_document(file_path)
 
 

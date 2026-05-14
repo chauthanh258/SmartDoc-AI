@@ -54,7 +54,7 @@ def _enrich_chunk_metadata(chunk: Document, chunk_index: int) -> Document:
     if source and not metadata.get("file_name"):
         metadata["file_name"] = Path(str(source)).name
 
-    # Normalize page metadata under one key used across the app.
+    # Normalize page metadata
     page_number = _to_int_or_none(metadata.get("page_number"))
     if page_number is None:
         page_number = _to_int_or_none(metadata.get("page"))
@@ -64,12 +64,7 @@ def _enrich_chunk_metadata(chunk: Document, chunk_index: int) -> Document:
     metadata["chunk_index"] = chunk_index
     chunk.metadata = metadata
 
-    # Validate page_content is a string (defensive check)
-    if not isinstance(chunk.page_content, str):
-        chunk.page_content = str(chunk.page_content) if chunk.page_content else ""
-
     # Contextual Chunking: Attach document identity directly to the text
-    # so that the vector embedding includes the doc context.
     file_name = metadata.get("file_name", "Unknown Document")
     location = ""
     if page_number is not None:
@@ -77,19 +72,15 @@ def _enrich_chunk_metadata(chunk: Document, chunk_index: int) -> Document:
     elif metadata.get("section"):
         location = f" - Mục {metadata.get('section')}"
     
-    context_header = f"[{file_name}{location}]"
+    category = metadata.get("category", "")
+    type_info = f" [{category}]" if category else ""
+    
+    context_header = f"[{file_name}{location}]{type_info}"
+    
     if not chunk.page_content.startswith(context_header):
         chunk.page_content = f"{context_header}\n{chunk.page_content}"
 
     return chunk
-
-
-def get_chunking_options() -> dict[str, tuple[int, ...]]:
-    """Expose supported chunk options for UI or API dropdowns."""
-    return {
-        "chunk_size": ALLOWED_CHUNK_SIZES,
-        "chunk_overlap": ALLOWED_CHUNK_OVERLAPS,
-    }
 
 
 def split_documents(
@@ -97,21 +88,57 @@ def split_documents(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
 ) -> list[Document]:
-    """Split LangChain Document objects and attach chunk-level metadata.
-
-    Every returned chunk keeps existing metadata and is enriched with:
-    - chunk_index: global index in the split output
-    - file_name: extracted from source path when available
-    - page_number: normalized page field for PDF citation support
+    """
+    Split LangChain Document objects.
+    Hỗ trợ 3 chiến lược:
+    1. Markdown Splitting: Dành cho pymupdf4llm (có format='markdown').
+    2. Structural Chunking: Dành cho Unstructured (có category).
+    3. Recursive Splitter: Fallback cho text thuần.
     """
     _validate_chunk_params(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
-        separators=["\n\n", "\n", ". ", "! ", "? ", "; ", ": ", " ", ""],
-    )
+    markdown_docs = [doc for doc in documents if doc.metadata.get("format") == "markdown"]
+    plain_docs = [doc for doc in documents if doc.metadata.get("format") != "markdown"]
 
-    raw_chunks = text_splitter.split_documents(documents)
-    return [_enrich_chunk_metadata(chunk, idx) for idx, chunk in enumerate(raw_chunks)]
+    all_chunks = []
+
+    # ── 1. Xử lý Markdown Docs (PyMuPDF4LLM) ────────────────────────────────
+    if markdown_docs:
+        from langchain_text_splitters import MarkdownHeaderTextSplitter
+        
+        headers_to_split_on = [
+            ("#", "Header 1"),
+            ("##", "Header 2"),
+            ("###", "Header 3"),
+        ]
+        md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on, strip_headers=False)
+        
+        recursive_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+
+        for doc in markdown_docs:
+            header_splits = md_splitter.split_text(doc.page_content)
+            for split in header_splits:
+                new_metadata = dict(doc.metadata)
+                new_metadata.update(split.metadata)
+                if len(split.page_content) > chunk_size:
+                    sub_chunks = recursive_splitter.split_text(split.page_content)
+                    for sub in sub_chunks:
+                        all_chunks.append(Document(page_content=sub, metadata=new_metadata))
+                else:
+                    all_chunks.append(Document(page_content=split.page_content, metadata=new_metadata))
+
+    # ── 2. Xử lý Plain Docs ──────────────────────────────────────────────────
+    if plain_docs:
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+        all_chunks.extend(text_splitter.split_documents(plain_docs))
+
+    return [_enrich_chunk_metadata(chunk, idx) for idx, chunk in enumerate(all_chunks)]
